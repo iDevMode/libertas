@@ -177,6 +177,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
   // Get schema/structure from connected platform
   app.get('/:id/schema', { preHandler: [authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    const { refresh } = request.query as { refresh?: string };
 
     const connection = await prisma.connectedAccount.findFirst({
       where: {
@@ -194,6 +195,21 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
         },
       });
       return;
+    }
+
+    // Check for cached schema first (unless refresh is requested)
+    if (refresh !== 'true') {
+      const cachedSchema = await prisma.sourceSchema.findUnique({
+        where: { connectedAccountId: connection.id },
+      });
+
+      if (cachedSchema && cachedSchema.expiresAt && cachedSchema.expiresAt > new Date()) {
+        reply.send({
+          success: true,
+          data: cachedSchema.schemaData,
+        });
+        return;
+      }
     }
 
     try {
@@ -225,6 +241,19 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
       });
     } catch (error) {
       logger.error({ error, connectionId: id }, 'Failed to discover schema');
+
+      // If API fails, try to return cached schema even if expired
+      const cachedSchema = await prisma.sourceSchema.findUnique({
+        where: { connectedAccountId: connection.id },
+      });
+
+      if (cachedSchema) {
+        reply.send({
+          success: true,
+          data: cachedSchema.schemaData,
+        });
+        return;
+      }
 
       reply.status(500).send({
         success: false,

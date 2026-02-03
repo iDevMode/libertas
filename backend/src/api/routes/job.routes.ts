@@ -68,8 +68,16 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
         success: true,
         data: {
           id: job.id,
+          sourcePlatform: job.sourcePlatform,
+          destinationType: job.destinationType,
           status: job.status,
+          progress: job.progress,
+          recordsTotal: job.recordsTotal,
+          recordsProcessed: job.recordsProcessed,
           createdAt: job.createdAt,
+          startedAt: job.startedAt,
+          completedAt: job.completedAt,
+          errorMessage: job.errorMessage,
         },
       });
     } catch (error) {

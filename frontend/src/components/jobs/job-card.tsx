@@ -33,10 +33,10 @@ export function JobCard({ job }: JobCardProps) {
       <div className="flex items-start justify-between mb-3">
         <div>
           <h3 className="font-semibold">
-            {getPlatformDisplayName(job.sourcePlatform)} Export
+            {job.sourcePlatform ? getPlatformDisplayName(job.sourcePlatform) : 'Data'} Export
           </h3>
           <p className="text-sm text-muted-foreground">
-            {job.destinationType.toUpperCase()} - Created{' '}
+            {job.destinationType ? job.destinationType.toUpperCase() : 'Processing'} - Created{' '}
             {formatRelativeTime(job.createdAt)}
           </p>
         </div>
