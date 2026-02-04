@@ -104,12 +104,20 @@ export function JobCard({ job }: JobCardProps) {
       {isRunning && (
         <div className="mb-4">
           <div className="flex justify-between text-sm mb-1">
-            <span>Progress</span>
-            <span>{job.progress}%</span>
+            <span>Exporting...</span>
+            <span>{job.recordsProcessed} records</span>
           </div>
-          <Progress value={job.progress} />
+          <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary animate-pulse"
+              style={{
+                width: job.progress > 0 ? `${job.progress}%` : '100%',
+                animation: job.progress === 0 ? 'pulse 1.5s ease-in-out infinite' : 'none'
+              }}
+            />
+          </div>
           <p className="text-xs text-muted-foreground mt-1">
-            {job.recordsProcessed} / {job.recordsTotal || '?'} records
+            {job.status === 'pending' ? 'Waiting to start...' : 'Processing pages and content blocks...'}
           </p>
         </div>
       )}

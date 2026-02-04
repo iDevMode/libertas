@@ -15,7 +15,7 @@ interface JobsState {
   cancelJob: (jobId: string) => Promise<boolean>;
   removeJob: (jobId: string) => void;
   deleteJob: (jobId: string) => Promise<boolean>;
-  updateJobProgress: (jobId: string, progress: number, recordsProcessed: number) => void;
+  updateJobProgress: (jobId: string, progress: number, recordsProcessed: number, recordsTotal?: number | null) => void;
   updateJobStatus: (jobId: string, status: string, errorMessage?: string) => void;
   clearError: () => void;
 }
@@ -128,23 +128,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     }
   },
 
-  updateJobProgress: (jobId: string, progress: number, recordsProcessed: number) => {
-    const { removedJobIds } = get();
-    // Don't update removed jobs
-    if (removedJobIds.has(jobId)) return;
-
-    set((state) => ({
-      jobs: state.jobs.map((j) =>
-        j.id === jobId ? { ...j, progress, recordsProcessed } : j
-      ),
-      currentJob:
-        state.currentJob?.id === jobId
-          ? { ...state.currentJob, progress, recordsProcessed }
-          : state.currentJob,
-    }));
-  },
-
-  updateJobStatus: (jobId: string, status: string, errorMessage?: string) => {
+  updateJobProgress: (jobId: string, progress: number, recordsProcessed: number, recordsTotal?: number | null) => {
     const { removedJobIds } = get();
     // Don't update removed jobs
     if (removedJobIds.has(jobId)) return;
@@ -154,9 +138,41 @@ export const useJobsStore = create<JobsState>((set, get) => ({
         j.id === jobId
           ? {
               ...j,
+              progress,
+              recordsProcessed,
+              recordsTotal: recordsTotal ?? j.recordsTotal,
+            }
+          : j
+      ),
+      currentJob:
+        state.currentJob?.id === jobId
+          ? {
+              ...state.currentJob,
+              progress,
+              recordsProcessed,
+              recordsTotal: recordsTotal ?? state.currentJob.recordsTotal,
+            }
+          : state.currentJob,
+    }));
+  },
+
+  updateJobStatus: (jobId: string, status: string, errorMessage?: string) => {
+    const { removedJobIds } = get();
+    // Don't update removed jobs
+    if (removedJobIds.has(jobId)) return;
+
+    const completedUpdates = status === 'completed'
+      ? { completedAt: new Date().toISOString(), progress: 100 }
+      : {};
+
+    set((state) => ({
+      jobs: state.jobs.map((j) =>
+        j.id === jobId
+          ? {
+              ...j,
               status: status as Job['status'],
               errorMessage,
-              ...(status === 'completed' ? { completedAt: new Date().toISOString() } : {}),
+              ...completedUpdates,
             }
           : j
       ),
@@ -166,7 +182,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
               ...state.currentJob,
               status: status as Job['status'],
               errorMessage,
-              ...(status === 'completed' ? { completedAt: new Date().toISOString() } : {}),
+              ...completedUpdates,
             }
           : state.currentJob,
     }));

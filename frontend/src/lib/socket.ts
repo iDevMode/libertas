@@ -28,7 +28,7 @@ export function initializeSocket(token: string): Socket {
     return socket;
   }
 
-  const serverUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+  const serverUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   socket = io(serverUrl, {
     auth: { token },

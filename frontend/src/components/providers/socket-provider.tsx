@@ -21,8 +21,9 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       jobId: string;
       progress: number;
       recordsProcessed: number;
+      recordsTotal?: number | null;
     }) => {
-      updateJobProgress(data.jobId, data.progress, data.recordsProcessed);
+      updateJobProgress(data.jobId, data.progress, data.recordsProcessed, data.recordsTotal);
     };
 
     const handleStatus = (data: {
