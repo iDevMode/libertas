@@ -422,8 +422,14 @@ export class NotionNormalizer implements INormalizer {
         };
 
       case 'relation':
-        // Relations are handled separately
-        return null;
+        // Store relation IDs for relational export
+        const relationIds = prop.relation?.map(r => r.id) || [];
+        return {
+          ...base,
+          propertyType: 'relation',
+          valueText: relationIds[0] || undefined,  // First relation ID for FK column
+          valueJson: relationIds,  // All relation IDs
+        };
 
       default:
         return {

@@ -393,13 +393,27 @@ export class NotionConnector extends BaseConnector {
 
   private extractPropertySchema(properties: Record<string, unknown>): SourceSchema['databases'][0]['properties'] {
     return Object.entries(properties).map(([name, prop]) => {
-      const property = prop as { id: string; type: string; select?: { options: Array<{ id: string; name: string; color: string }> }; multi_select?: { options: Array<{ id: string; name: string; color: string }> } };
-      return {
+      const property = prop as {
+        id: string;
+        type: string;
+        select?: { options: Array<{ id: string; name: string; color: string }> };
+        multi_select?: { options: Array<{ id: string; name: string; color: string }> };
+        relation?: { database_id: string; type: string };
+      };
+
+      const schema: SourceSchema['databases'][0]['properties'][0] = {
         id: property.id,
         name,
         type: this.mapNotionPropertyType(property.type),
         options: property.select?.options || property.multi_select?.options,
       };
+
+      // For relation properties, capture the target database ID
+      if (property.type === 'relation' && property.relation?.database_id) {
+        schema.relationTargetDatabaseId = property.relation.database_id;
+      }
+
+      return schema;
     });
   }
 

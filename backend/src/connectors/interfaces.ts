@@ -56,6 +56,7 @@ export interface PropertySchema {
   name: string;
   type: PropertyType;
   options?: SelectOption[];
+  relationTargetDatabaseId?: string;  // For relation properties, the target database ID
 }
 
 export interface SelectOption {

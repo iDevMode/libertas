@@ -10,10 +10,13 @@ import { emitJobStatus } from '../../websocket/socket.js';
 const createJobSchema = z.object({
   connectionId: z.string().uuid(),
   selectedEntities: z.array(z.string()),
-  destinationType: z.enum(['sqlite', 'json', 'csv', 'markdown']),
+  destinationType: z.enum(['sqlite', 'json', 'csv', 'markdown', 'relational_sqlite']),
   includeAttachments: z.boolean().default(false),
   options: z.record(z.unknown()).optional(),
 });
+
+// Pro tier destination types
+const PRO_DESTINATION_TYPES = ['relational_sqlite'];
 
 export async function jobRoutes(app: FastifyInstance): Promise<void> {
   // Create a new export job
@@ -38,6 +41,20 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
           },
         });
         return;
+      }
+
+      // Check Pro tier requirement for Pro destination types
+      if (PRO_DESTINATION_TYPES.includes(input.destinationType)) {
+        if (request.user!.tier === 'community') {
+          reply.status(403).send({
+            success: false,
+            error: {
+              code: 'FORBIDDEN',
+              message: 'Relational SQLite export requires Pro subscription',
+            },
+          });
+          return;
+        }
       }
 
       // Create job record

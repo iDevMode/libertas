@@ -3,7 +3,7 @@
 export type Platform = 'notion' | 'airtable' | 'google_sheets';
 export type SubscriptionTier = 'community' | 'pro' | 'enterprise';
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
-export type DestinationType = 'sqlite' | 'postgresql' | 'json' | 'csv' | 'markdown';
+export type DestinationType = 'sqlite' | 'postgresql' | 'json' | 'csv' | 'markdown' | 'relational_sqlite';
 export type EntityType = 'page' | 'database' | 'record' | 'task' | 'document' | 'row';
 export type PropertyType = 'text' | 'number' | 'date' | 'boolean' | 'select' | 'multi_select' | 'relation' | 'file' | 'url' | 'email' | 'phone' | 'formula' | 'rollup';
 export type RelationType = 'parent_of' | 'child_of' | 'related_to' | 'assigned_to' | 'mentions' | 'linked_to';

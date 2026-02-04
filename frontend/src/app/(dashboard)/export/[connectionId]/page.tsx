@@ -18,7 +18,7 @@ export default function ExportConfigPage() {
   const params = useParams();
   const connectionId = params.connectionId as string;
 
-  const { isAuthenticated, checkAuth } = useAuthStore();
+  const { isAuthenticated, checkAuth, user } = useAuthStore();
   const { connections, fetchConnections, getSchema } = useConnectionsStore();
   const { createJob, isLoading: isCreatingJob, error: jobError, clearError } = useJobsStore();
 
@@ -210,6 +210,7 @@ export default function ExportConfigPage() {
         <DestinationSelector
           selected={destinationType}
           onSelect={setDestinationType}
+          userTier={user?.tier}
         />
       </section>
 

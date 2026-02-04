@@ -36,7 +36,12 @@ export interface MarkdownConfig {
   includeFrontmatter?: boolean;
 }
 
-export type DestinationConfig = SQLiteConfig | PostgreSQLConfig | JSONConfig | CSVConfig | MarkdownConfig;
+export interface RelationalSQLiteConfig {
+  type: 'relational_sqlite';
+  filepath: string;
+}
+
+export type DestinationConfig = SQLiteConfig | PostgreSQLConfig | JSONConfig | CSVConfig | MarkdownConfig | RelationalSQLiteConfig;
 
 // Write result
 export interface WriteResult {

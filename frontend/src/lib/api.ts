@@ -291,7 +291,7 @@ export interface Job {
 export interface CreateJobInput {
   connectionId: string;
   selectedEntities: string[];
-  destinationType: 'sqlite' | 'json' | 'csv' | 'markdown';
+  destinationType: 'sqlite' | 'json' | 'csv' | 'markdown' | 'relational_sqlite';
   includeAttachments?: boolean;
   options?: Record<string, unknown>;
 }

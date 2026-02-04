@@ -86,3 +86,19 @@ export interface INormalizer {
 export interface IUniversalNormalizer {
   normalize(raw: RawEntity, platform: Platform): NormalizedResult;
 }
+
+// Database schema types for relational export (Pro feature)
+export interface RelationalDatabaseSchema {
+  id: string;
+  name: string;
+  tableName: string;  // Sanitized for SQL (e.g., "My Tasks" -> "my_tasks")
+  properties: RelationalPropertySchema[];
+}
+
+export interface RelationalPropertySchema {
+  id: string;
+  name: string;
+  columnName: string;  // Sanitized for SQL
+  type: PropertyType;
+  relationTargetDatabaseId?: string;  // For relation properties, the target database ID
+}

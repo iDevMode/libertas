@@ -6,8 +6,13 @@ import { config } from '../common/config.js';
 import { MigrationJobData } from './queue.js';
 import { ConnectorFactory } from '../connectors/index.js';
 import { universalNormalizer } from '../transformers/index.js';
-import { DestinationFactory, DestinationConfig } from '../destinations/index.js';
-import { Platform, DestinationType } from '../common/types.js';
+import {
+  DestinationFactory,
+  DestinationConfig,
+  RelationalSQLiteAdapter,
+  convertToRelationalSchema,
+} from '../destinations/index.js';
+import { Platform, DestinationType, PropertyType } from '../common/types.js';
 import { join } from 'path';
 import { mkdir } from 'fs/promises';
 import { emitJobProgress, emitJobStatus } from '../websocket/socket.js';
@@ -76,6 +81,10 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
         outputPath = join(outputDir, 'export.db');
         destinationConfig = { type: 'sqlite', filepath: outputPath };
         break;
+      case 'relational_sqlite':
+        outputPath = join(outputDir, 'export-relational.db');
+        destinationConfig = { type: 'relational_sqlite', filepath: outputPath };
+        break;
       case 'json':
         outputPath = join(outputDir, 'export.json');
         destinationConfig = {
@@ -105,6 +114,33 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
     }
 
     await destination.connect(destinationConfig);
+
+    // For relational_sqlite, we need to fetch database schemas first
+    if (destinationType === 'relational_sqlite' && destination instanceof RelationalSQLiteAdapter) {
+      logger.info({ jobId }, 'Fetching database schemas for relational export');
+
+      // Fetch schema from source platform
+      const sourceSchema = await connector.discoverSchema(token);
+
+      // Convert to relational schemas for selected databases
+      const selectedEntities = migrationJob.selectedEntities as string[];
+      const relationalSchemas = sourceSchema.databases
+        .filter(db => selectedEntities.includes(db.id))
+        .map(db => convertToRelationalSchema(
+          db.id,
+          db.title,
+          db.properties.map(p => ({
+            id: p.id,
+            name: p.name,
+            type: p.type as PropertyType,
+            relationTargetDatabaseId: p.relationTargetDatabaseId,
+          }))
+        ));
+
+      destination.setDatabaseSchemas(relationalSchemas);
+      logger.info({ jobId, schemaCount: relationalSchemas.length }, 'Database schemas prepared');
+    }
+
     await destination.createSchema();
 
     // Start transaction
