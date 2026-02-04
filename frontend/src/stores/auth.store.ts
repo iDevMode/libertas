@@ -3,6 +3,7 @@ import { api, User } from '@/lib/api';
 
 interface AuthState {
   user: User | null;
+  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
@@ -16,6 +17,7 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
+  token: null,
   isAuthenticated: false,
   isLoading: false,
   error: null,
@@ -25,7 +27,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const { user, token } = await api.login(email, password);
       api.setToken(token);
-      set({ user, isAuthenticated: true, isLoading: false });
+      set({ user, token, isAuthenticated: true, isLoading: false });
       return true;
     } catch (err) {
       set({ error: (err as Error).message, isLoading: false });
@@ -38,7 +40,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const { user, token } = await api.register(email, password, name);
       api.setToken(token);
-      set({ user, isAuthenticated: true, isLoading: false });
+      set({ user, token, isAuthenticated: true, isLoading: false });
       return true;
     } catch (err) {
       set({ error: (err as Error).message, isLoading: false });
@@ -53,23 +55,23 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Ignore logout errors
     }
     api.setToken(null);
-    set({ user: null, isAuthenticated: false });
+    set({ user: null, token: null, isAuthenticated: false });
   },
 
   checkAuth: async () => {
     const token = api.getToken();
     if (!token) {
-      set({ isAuthenticated: false });
+      set({ isAuthenticated: false, token: null });
       return false;
     }
 
     try {
       const user = await api.getMe();
-      set({ user, isAuthenticated: true });
+      set({ user, token, isAuthenticated: true });
       return true;
     } catch {
       api.setToken(null);
-      set({ user: null, isAuthenticated: false });
+      set({ user: null, token: null, isAuthenticated: false });
       return false;
     }
   },

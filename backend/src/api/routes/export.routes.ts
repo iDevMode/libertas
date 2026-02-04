@@ -4,6 +4,8 @@ import { authenticate } from '../middleware/auth.middleware.js';
 import Database from 'better-sqlite3';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
+import { join } from 'path';
+import archiver from 'archiver';
 
 export async function exportRoutes(app: FastifyInstance): Promise<void> {
   // List entities in an export
@@ -173,14 +175,52 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const fileStat = await stat(job.outputPath);
-      const filename = `export-${job.sourcePlatform}-${job.id}.db`;
+      const destinationType = job.destinationType;
 
-      reply.header('Content-Type', 'application/x-sqlite3');
-      reply.header('Content-Disposition', `attachment; filename="${filename}"`);
-      reply.header('Content-Length', fileStat.size);
+      // Handle different destination types
+      if (fileStat.isDirectory()) {
+        // For directory-based exports (JSON, CSV, Markdown), create a zip
+        if (destinationType === 'json') {
+          // JSON has a single file - serve it directly
+          const jsonPath = join(job.outputPath, 'export.json');
+          const jsonStat = await stat(jsonPath);
+          const filename = `export-${job.sourcePlatform}-${job.id}.json`;
 
-      return reply.send(createReadStream(job.outputPath));
-    } catch {
+          reply.header('Content-Type', 'application/json');
+          reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+          reply.header('Content-Length', jsonStat.size);
+
+          return reply.send(createReadStream(jsonPath));
+        } else {
+          // CSV and Markdown - create a zip archive
+          const filename = `export-${job.sourcePlatform}-${job.id}.zip`;
+
+          reply.header('Content-Type', 'application/zip');
+          reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+
+          const archive = archiver('zip', { zlib: { level: 9 } });
+
+          archive.on('error', (err) => {
+            throw err;
+          });
+
+          // Add all files from the output directory
+          archive.directory(job.outputPath, false);
+          archive.finalize();
+
+          return reply.send(archive);
+        }
+      } else {
+        // SQLite - single file
+        const filename = `export-${job.sourcePlatform}-${job.id}.db`;
+
+        reply.header('Content-Type', 'application/x-sqlite3');
+        reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+        reply.header('Content-Length', fileStat.size);
+
+        return reply.send(createReadStream(job.outputPath));
+      }
+    } catch (error) {
       reply.status(404).send({
         success: false,
         error: {

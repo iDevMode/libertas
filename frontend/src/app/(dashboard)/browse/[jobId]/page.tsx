@@ -237,7 +237,12 @@ export default function BrowseDataPage() {
                 {entities.map((entity) => (
                   <tr key={entity.id} className="hover:bg-muted/30">
                     <td className="px-4 py-3">
-                      <span className="font-medium">{entity.title || 'Untitled'}</span>
+                      <Link
+                        href={`/browse/${jobId}/entity/${entity.id}`}
+                        className="font-medium text-primary hover:underline"
+                      >
+                        {entity.title || 'Untitled'}
+                      </Link>
                     </td>
                     <td className="px-4 py-3">
                       <span className="text-sm text-muted-foreground capitalize">
@@ -250,17 +255,25 @@ export default function BrowseDataPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {entity.source_url && (
-                        <a
-                          href={entity.source_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center text-sm text-primary hover:underline"
+                      <div className="flex items-center gap-3">
+                        <Link
+                          href={`/browse/${jobId}/entity/${entity.id}`}
+                          className="text-sm text-primary hover:underline"
                         >
-                          View Source
-                          <ExternalLink className="w-3 h-3 ml-1" />
-                        </a>
-                      )}
+                          View Data
+                        </Link>
+                        {entity.source_url && (
+                          <a
+                            href={entity.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
+                          >
+                            Source
+                            <ExternalLink className="w-3 h-3 ml-1" />
+                          </a>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

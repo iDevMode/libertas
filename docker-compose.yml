@@ -47,6 +47,20 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: dev-jwt-secret-change-in-production-must-be-32-chars
       PORT: 8000
+      APP_URL: http://localhost:3000
+      EXPORT_DIR: /app/exports
+      # OAuth - Notion
+      NOTION_CLIENT_ID: ${NOTION_CLIENT_ID}
+      NOTION_CLIENT_SECRET: ${NOTION_CLIENT_SECRET}
+      NOTION_REDIRECT_URI: ${NOTION_REDIRECT_URI}
+      # OAuth - Airtable
+      AIRTABLE_CLIENT_ID: ${AIRTABLE_CLIENT_ID:-}
+      AIRTABLE_CLIENT_SECRET: ${AIRTABLE_CLIENT_SECRET:-}
+      AIRTABLE_REDIRECT_URI: ${AIRTABLE_REDIRECT_URI:-}
+      # OAuth - Google
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
     ports:
       - "8000:8000"
     volumes:

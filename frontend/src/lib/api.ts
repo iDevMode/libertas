@@ -43,9 +43,13 @@ class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     const headers: HeadersInit = {
-      'Content-Type': 'application/json',
       ...options.headers,
     };
+
+    // Only set Content-Type for requests with a body
+    if (options.body) {
+      (headers as Record<string, string>)['Content-Type'] = 'application/json';
+    }
 
     if (this.token) {
       (headers as Record<string, string>)['Authorization'] = `Bearer ${this.token}`;
@@ -114,8 +118,9 @@ class ApiClient {
     });
   }
 
-  async getConnectionSchema(connectionId: string) {
-    return this.request<SourceSchema>(`/api/connections/${connectionId}/schema`);
+  async getConnectionSchema(connectionId: string, refresh = false) {
+    const query = refresh ? '?refresh=true' : '';
+    return this.request<SourceSchema>(`/api/connections/${connectionId}/schema${query}`);
   }
 
   // Jobs
@@ -138,9 +143,37 @@ class ApiClient {
   }
 
   async cancelJob(jobId: string) {
-    return this.request<void>(`/api/jobs/${jobId}`, {
+    const headers: HeadersInit = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/jobs/${jobId}`, {
       method: 'DELETE',
+      headers,
     });
+
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error?.message || 'Cancel failed');
+    }
+  }
+
+  async deleteJob(jobId: string) {
+    const headers: HeadersInit = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/jobs/${jobId}/delete`, {
+      method: 'DELETE',
+      headers,
+    });
+
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error?.message || 'Delete failed');
+    }
   }
 
   async getJobDownload(jobId: string) {
@@ -162,6 +195,43 @@ class ApiClient {
 
   async getExportEntity(jobId: string, entityId: string) {
     return this.request<EntityDetail>(`/api/exports/${jobId}/entities/${entityId}`);
+  }
+
+  async downloadExport(jobId: string, filename?: string): Promise<void> {
+    const headers: HeadersInit = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/exports/${jobId}/file`, {
+      headers,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: { message: 'Download failed' } }));
+      throw new Error(error.error?.message || 'Download failed');
+    }
+
+    // Get filename from Content-Disposition header or use provided filename
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let downloadFilename = filename || `export-${jobId}`;
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="?([^"]+)"?/);
+      if (match) {
+        downloadFilename = match[1];
+      }
+    }
+
+    // Create blob and trigger download
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = downloadFilename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
   }
 }
 

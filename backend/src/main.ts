@@ -2,7 +2,6 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import websocket from '@fastify/websocket';
 import { config } from './common/config.js';
 import { logger } from './common/logger.js';
 import { authRoutes } from './api/routes/auth.routes.js';
@@ -12,6 +11,7 @@ import { exportRoutes } from './api/routes/export.routes.js';
 import { healthRoutes } from './api/routes/health.routes.js';
 import { errorHandler } from './api/middleware/error-handler.js';
 import { initializeJobWorkers } from './jobs/worker.js';
+import { initializeSocketIO } from './websocket/socket.js';
 
 async function bootstrap(): Promise<void> {
   const app = Fastify({
@@ -29,8 +29,6 @@ async function bootstrap(): Promise<void> {
     timeWindow: '1 minute',
   });
 
-  // WebSocket support for real-time updates
-  await app.register(websocket);
 
   // Error handling
   app.setErrorHandler(errorHandler);
@@ -49,6 +47,11 @@ async function bootstrap(): Promise<void> {
   try {
     await app.listen({ port: config.port, host: '0.0.0.0' });
     logger.info(`Server running on http://localhost:${config.port}`);
+
+    // Initialize Socket.IO for real-time updates
+    const httpServer = app.server;
+    initializeSocketIO(httpServer);
+    logger.info('WebSocket server initialized');
   } catch (err) {
     logger.error(err);
     process.exit(1);

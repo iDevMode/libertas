@@ -47,8 +47,8 @@ export function ConnectionCard({ connection }: ConnectionCardProps) {
       </div>
 
       <div className="flex gap-2">
-        <Link href={`/export/${connection.id}`} className="flex-1">
-          <Button className="w-full" size="sm">
+        <Link href={`/export/${connection.id}`}>
+          <Button size="sm">
             Export
           </Button>
         </Link>

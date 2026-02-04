@@ -29,7 +29,14 @@ export interface CSVConfig {
   delimiter?: string;
 }
 
-export type DestinationConfig = SQLiteConfig | PostgreSQLConfig | JSONConfig | CSVConfig;
+export interface MarkdownConfig {
+  type: 'markdown';
+  outputDir: string;
+  includeMetadata?: boolean;
+  includeFrontmatter?: boolean;
+}
+
+export type DestinationConfig = SQLiteConfig | PostgreSQLConfig | JSONConfig | CSVConfig | MarkdownConfig;
 
 // Write result
 export interface WriteResult {

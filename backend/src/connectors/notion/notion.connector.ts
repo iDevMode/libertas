@@ -81,6 +81,8 @@ export class NotionConnector extends BaseConnector {
 
   async discoverSchema(token: AuthToken): Promise<SourceSchema> {
     const databases: SourceSchema['databases'] = [];
+
+    // First, fetch all databases
     let hasMore = true;
     let startCursor: string | undefined;
 
@@ -108,6 +110,40 @@ export class NotionConnector extends BaseConnector {
       startCursor = data.next_cursor;
     }
 
+    // Also fetch top-level pages (not inside databases)
+    hasMore = true;
+    startCursor = undefined;
+
+    while (hasMore) {
+      const response = await this.makeRequest(token, '/search', {
+        method: 'POST',
+        body: JSON.stringify({
+          filter: { property: 'object', value: 'page' },
+          start_cursor: startCursor,
+          page_size: 100,
+        }),
+      });
+
+      const data = await response.json();
+
+      for (const page of data.results) {
+        // Skip pages that are inside databases (they'll be exported with the database)
+        if (page.parent?.type === 'database_id') {
+          continue;
+        }
+
+        databases.push({
+          id: page.id,
+          title: this.extractEntityTitle(page),
+          properties: [], // Pages don't have property schemas like databases
+        });
+      }
+
+      hasMore = data.has_more;
+      startCursor = data.next_cursor;
+    }
+
+    logger.info({ databaseCount: databases.length }, 'Schema discovery complete');
     return { databases };
   }
 
@@ -149,12 +185,146 @@ export class NotionConnector extends BaseConnector {
 
     const data = await response.json();
 
+    // Fetch content blocks for pages
+    let blocks: unknown[] = [];
+    if (data.object === 'page') {
+      blocks = await this.fetchAllBlocks(token, id);
+    }
+
     return {
       id: data.id,
       type: data.object,
-      rawData: data,
+      rawData: { ...data, blocks },
       extractedAt: new Date(),
     };
+  }
+
+  /**
+   * Override extractBatch to query database contents and pages.
+   * For databases: queries the database and yields all pages within.
+   * For pages: fetches the page directly.
+   */
+  async *extractBatch(
+    token: AuthToken,
+    entityIds: string[]
+  ): AsyncGenerator<RawEntity, void, unknown> {
+    const rateLimits = this.getRateLimits();
+    const delayMs = 1000 / rateLimits.requestsPerSecond;
+
+    for (const entityId of entityIds) {
+      // First, try to query as a database
+      const dbResponse = await this.makeRequest(token, `/databases/${entityId}/query`, {
+        method: 'POST',
+        body: JSON.stringify({
+          page_size: 100,
+        }),
+      });
+
+      if (dbResponse.ok) {
+        // It's a database - fetch all pages within it
+        logger.info({ entityId }, 'Querying Notion database');
+
+        let hasMore = true;
+        let startCursor: string | undefined;
+        let isFirstRequest = true;
+
+        while (hasMore) {
+          let response: Response;
+          if (isFirstRequest) {
+            response = dbResponse;
+            isFirstRequest = false;
+          } else {
+            response = await this.makeRequest(token, `/databases/${entityId}/query`, {
+              method: 'POST',
+              body: JSON.stringify({
+                start_cursor: startCursor,
+                page_size: 100,
+              }),
+            });
+          }
+
+          const data = await response.json();
+
+          for (const page of data.results) {
+            // Fetch content blocks for this page
+            const blocks = await this.fetchAllBlocks(token, page.id);
+            await this.delay(delayMs);
+
+            yield {
+              id: page.id,
+              type: page.object,
+              rawData: { ...page, blocks },
+              extractedAt: new Date(),
+            };
+          }
+
+          hasMore = data.has_more;
+          startCursor = data.next_cursor;
+        }
+      } else {
+        // Not a database - try to fetch as a page
+        logger.info({ entityId }, 'Fetching Notion page');
+
+        const pageResponse = await this.makeRequest(token, `/pages/${entityId}`);
+
+        if (pageResponse.ok) {
+          const page = await pageResponse.json();
+          // Fetch content blocks for this page
+          const blocks = await this.fetchAllBlocks(token, page.id);
+
+          yield {
+            id: page.id,
+            type: page.object,
+            rawData: { ...page, blocks },
+            extractedAt: new Date(),
+          };
+        } else {
+          logger.warn({ entityId }, 'Failed to fetch entity as database or page');
+        }
+
+        await this.delay(delayMs);
+      }
+    }
+  }
+
+  /**
+   * Fetch all content blocks for a page (handles pagination)
+   */
+  private async fetchAllBlocks(token: AuthToken, pageId: string): Promise<unknown[]> {
+    const blocks: unknown[] = [];
+    let hasMore = true;
+    let startCursor: string | undefined;
+    const rateLimits = this.getRateLimits();
+    const delayMs = 1000 / rateLimits.requestsPerSecond;
+
+    try {
+      while (hasMore) {
+        const url = startCursor
+          ? `/blocks/${pageId}/children?start_cursor=${startCursor}&page_size=100`
+          : `/blocks/${pageId}/children?page_size=100`;
+
+        const response = await this.makeRequest(token, url);
+
+        if (!response.ok) {
+          logger.warn({ pageId }, 'Failed to fetch blocks for page');
+          break;
+        }
+
+        const data = await response.json();
+        blocks.push(...data.results);
+
+        hasMore = data.has_more;
+        startCursor = data.next_cursor;
+
+        if (hasMore) {
+          await this.delay(delayMs);
+        }
+      }
+    } catch (error) {
+      logger.warn({ pageId, error: (error as Error).message }, 'Error fetching blocks');
+    }
+
+    return blocks;
   }
 
   getRateLimits(): RateLimitConfig {

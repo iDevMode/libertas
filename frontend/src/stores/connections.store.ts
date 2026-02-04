@@ -11,7 +11,7 @@ interface ConnectionsState {
   initiateOAuth: (platform: string) => Promise<void>;
   connectPlatform: (platform: string, code: string, state?: string) => Promise<boolean>;
   disconnectPlatform: (connectionId: string) => Promise<boolean>;
-  getSchema: (connectionId: string) => Promise<SourceSchema | null>;
+  getSchema: (connectionId: string, refresh?: boolean) => Promise<SourceSchema | null>;
   clearError: () => void;
   clearConnecting: () => void;
 }
@@ -72,9 +72,9 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
     }
   },
 
-  getSchema: async (connectionId: string) => {
+  getSchema: async (connectionId: string, refresh = true) => {
     try {
-      return await api.getConnectionSchema(connectionId);
+      return await api.getConnectionSchema(connectionId, refresh);
     } catch (err) {
       set({ error: (err as Error).message });
       return null;

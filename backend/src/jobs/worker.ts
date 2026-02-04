@@ -6,10 +6,11 @@ import { config } from '../common/config.js';
 import { MigrationJobData } from './queue.js';
 import { ConnectorFactory } from '../connectors/index.js';
 import { universalNormalizer } from '../transformers/index.js';
-import { SQLiteAdapter } from '../destinations/sqlite.adapter.js';
-import { Platform } from '../common/types.js';
+import { DestinationFactory, DestinationConfig } from '../destinations/index.js';
+import { Platform, DestinationType } from '../common/types.js';
 import { join } from 'path';
 import { mkdir } from 'fs/promises';
+import { emitJobProgress, emitJobStatus } from '../websocket/socket.js';
 
 async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
   const { jobId, userId } = job.data;
@@ -40,6 +41,9 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
     },
   });
 
+  // Emit job started event
+  emitJobStatus(jobId, userId, { status: 'running' });
+
   try {
     const { sourceAccount } = migrationJob;
     if (!sourceAccount) {
@@ -55,13 +59,52 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
       tokenType: 'Bearer',
     };
 
-    // Initialize destination
-    const outputDir = join(config.exportDir, userId);
+    // Initialize destination based on job's destinationType
+    const destinationType = migrationJob.destinationType as DestinationType;
+    const outputDir = join(config.exportDir, userId, jobId);
     await mkdir(outputDir, { recursive: true });
-    const outputPath = join(outputDir, `${jobId}.db`);
 
-    const destination = new SQLiteAdapter();
-    await destination.connect({ type: 'sqlite', filepath: outputPath });
+    // Create the appropriate destination adapter
+    const destination = DestinationFactory.create(destinationType);
+
+    // Build config based on destination type
+    let destinationConfig: DestinationConfig;
+    let outputPath: string;
+
+    switch (destinationType) {
+      case 'sqlite':
+        outputPath = join(outputDir, 'export.db');
+        destinationConfig = { type: 'sqlite', filepath: outputPath };
+        break;
+      case 'json':
+        outputPath = join(outputDir, 'export.json');
+        destinationConfig = {
+          type: 'json',
+          outputDir,
+          prettyPrint: true,
+        };
+        break;
+      case 'csv':
+        outputPath = outputDir; // CSV creates multiple files
+        destinationConfig = {
+          type: 'csv',
+          outputDir,
+          delimiter: ',',
+        };
+        break;
+      case 'markdown':
+        outputPath = outputDir; // Markdown creates multiple files
+        destinationConfig = {
+          type: 'markdown',
+          outputDir,
+          includeFrontmatter: true,
+        };
+        break;
+      default:
+        throw new Error(`Unsupported destination type: ${destinationType}`);
+    }
+
+    await destination.connect(destinationConfig);
     await destination.createSchema();
 
     // Start transaction
@@ -70,20 +113,23 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
     try {
       const selectedEntities = migrationJob.selectedEntities as string[];
       let processed = 0;
-      const total = selectedEntities.length;
+      let lastProgressUpdate = Date.now();
+      const PROGRESS_UPDATE_INTERVAL = 500; // Update progress every 500ms max
 
-      // Extract and process each entity
+      // Extract and process each entity (pages within selected databases)
       for await (const rawEntity of connector.extractBatch(token, selectedEntities)) {
-        // Check if job was cancelled
-        const currentJob = await prisma.migrationJob.findUnique({
-          where: { id: jobId },
-          select: { status: true },
-        });
+        // Check if job was cancelled (throttled to avoid DB spam)
+        if (Date.now() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL) {
+          const currentJob = await prisma.migrationJob.findUnique({
+            where: { id: jobId },
+            select: { status: true },
+          });
 
-        if (currentJob?.status === 'cancelled') {
-          await destination.rollback(transaction);
-          logger.info({ jobId }, 'Job cancelled during processing');
-          return;
+          if (currentJob?.status === 'cancelled') {
+            await destination.rollback(transaction);
+            logger.info({ jobId }, 'Job cancelled during processing');
+            return;
+          }
         }
 
         // Normalize entity
@@ -96,37 +142,56 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
         await destination.writeContentBlocks(normalized.contentBlocks);
         await destination.writeAttachments(normalized.attachments);
 
-        // Update progress
+        // Update progress (throttled)
         processed++;
-        const progress = Math.floor((processed / total) * 100);
+        const now = Date.now();
+        if (now - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL) {
+          lastProgressUpdate = now;
 
-        await prisma.migrationJob.update({
-          where: { id: jobId },
-          data: {
-            progress,
+          await prisma.migrationJob.update({
+            where: { id: jobId },
+            data: {
+              recordsProcessed: processed,
+              recordsTotal: processed, // Update total as we discover records
+            },
+          });
+
+          // Emit progress via WebSocket - show records processed without percentage
+          emitJobProgress(jobId, userId, {
+            progress: 0, // Unknown total, so no percentage
             recordsProcessed: processed,
-          },
-        });
+            recordsTotal: null, // Unknown
+            status: 'running',
+          });
 
-        // Update BullMQ job progress for real-time updates
-        await job.updateProgress(progress);
-
-        logger.debug({ jobId, processed, total, progress }, 'Job progress');
+          logger.debug({ jobId, processed }, 'Job progress');
+        }
       }
 
       // Commit transaction
       await destination.commit(transaction);
 
       // Mark job as completed
+      const completedAt = new Date();
       await prisma.migrationJob.update({
         where: { id: jobId },
         data: {
           status: 'completed',
           progress: 100,
           recordsProcessed: processed,
-          completedAt: new Date(),
+          recordsTotal: processed,
+          completedAt,
           outputPath,
         },
+      });
+
+      // Emit job completed event
+      emitJobStatus(jobId, userId, { status: 'completed', completedAt });
+      emitJobProgress(jobId, userId, {
+        progress: 100,
+        recordsProcessed: processed,
+        recordsTotal: processed,
+        status: 'completed',
       });
 
       logger.info({ jobId, processed }, 'Migration job completed');
@@ -137,15 +202,19 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
       await destination.disconnect();
     }
   } catch (error) {
-    logger.error({ jobId, error: (error as Error).message }, 'Migration job failed');
+    const errorMessage = (error as Error).message;
+    logger.error({ jobId, error: errorMessage }, 'Migration job failed');
 
     await prisma.migrationJob.update({
       where: { id: jobId },
       data: {
         status: 'failed',
-        errorMessage: (error as Error).message,
+        errorMessage,
       },
     });
+
+    // Emit job failed event
+    emitJobStatus(jobId, userId, { status: 'failed', errorMessage });
 
     throw error;
   }

@@ -6,12 +6,17 @@ interface JobsState {
   currentJob: Job | null;
   isLoading: boolean;
   error: string | null;
+  // Track removed job IDs to prevent WebSocket from re-adding them
+  removedJobIds: Set<string>;
 
   fetchJobs: (params?: { status?: string; limit?: number; offset?: number }) => Promise<void>;
   fetchJob: (jobId: string) => Promise<void>;
   createJob: (input: CreateJobInput) => Promise<Job | null>;
   cancelJob: (jobId: string) => Promise<boolean>;
+  removeJob: (jobId: string) => void;
+  deleteJob: (jobId: string) => Promise<boolean>;
   updateJobProgress: (jobId: string, progress: number, recordsProcessed: number) => void;
+  updateJobStatus: (jobId: string, status: string, errorMessage?: string) => void;
   clearError: () => void;
 }
 
@@ -20,18 +25,27 @@ export const useJobsStore = create<JobsState>((set, get) => ({
   currentJob: null,
   isLoading: false,
   error: null,
+  removedJobIds: new Set<string>(),
 
   fetchJobs: async (params) => {
     set({ isLoading: true, error: null });
     try {
       const { items } = await api.getJobs(params);
-      set({ jobs: items, isLoading: false });
+      // Filter out jobs that were removed locally
+      const { removedJobIds } = get();
+      const filteredItems = items.filter((job) => !removedJobIds.has(job.id));
+      set({ jobs: filteredItems, isLoading: false });
     } catch (err) {
       set({ error: (err as Error).message, isLoading: false });
     }
   },
 
   fetchJob: async (jobId: string) => {
+    // Don't fetch if job was removed
+    const { removedJobIds } = get();
+    if (removedJobIds.has(jobId)) {
+      return;
+    }
     set({ isLoading: true, error: null });
     try {
       const job = await api.getJob(jobId);
@@ -61,12 +75,52 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       await api.cancelJob(jobId);
-      set((state) => ({
-        jobs: state.jobs.map((j) =>
-          j.id === jobId ? { ...j, status: 'cancelled' as const } : j
-        ),
-        isLoading: false,
-      }));
+      // Remove the job from the list and track it as removed
+      set((state) => {
+        const newRemovedIds = new Set(state.removedJobIds);
+        newRemovedIds.add(jobId);
+        return {
+          jobs: state.jobs.filter((j) => j.id !== jobId),
+          currentJob: state.currentJob?.id === jobId ? null : state.currentJob,
+          removedJobIds: newRemovedIds,
+          isLoading: false,
+        };
+      });
+      return true;
+    } catch (err) {
+      set({ error: (err as Error).message, isLoading: false });
+      return false;
+    }
+  },
+
+  // Remove a job from the UI without cancelling (for completed/failed jobs)
+  removeJob: (jobId: string) => {
+    set((state) => {
+      const newRemovedIds = new Set(state.removedJobIds);
+      newRemovedIds.add(jobId);
+      return {
+        jobs: state.jobs.filter((j) => j.id !== jobId),
+        currentJob: state.currentJob?.id === jobId ? null : state.currentJob,
+        removedJobIds: newRemovedIds,
+      };
+    });
+  },
+
+  // Delete a job from the backend and remove from UI
+  deleteJob: async (jobId: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      await api.deleteJob(jobId);
+      set((state) => {
+        const newRemovedIds = new Set(state.removedJobIds);
+        newRemovedIds.add(jobId);
+        return {
+          jobs: state.jobs.filter((j) => j.id !== jobId),
+          currentJob: state.currentJob?.id === jobId ? null : state.currentJob,
+          removedJobIds: newRemovedIds,
+          isLoading: false,
+        };
+      });
       return true;
     } catch (err) {
       set({ error: (err as Error).message, isLoading: false });
@@ -75,6 +129,10 @@ export const useJobsStore = create<JobsState>((set, get) => ({
   },
 
   updateJobProgress: (jobId: string, progress: number, recordsProcessed: number) => {
+    const { removedJobIds } = get();
+    // Don't update removed jobs
+    if (removedJobIds.has(jobId)) return;
+
     set((state) => ({
       jobs: state.jobs.map((j) =>
         j.id === jobId ? { ...j, progress, recordsProcessed } : j
@@ -82,6 +140,34 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       currentJob:
         state.currentJob?.id === jobId
           ? { ...state.currentJob, progress, recordsProcessed }
+          : state.currentJob,
+    }));
+  },
+
+  updateJobStatus: (jobId: string, status: string, errorMessage?: string) => {
+    const { removedJobIds } = get();
+    // Don't update removed jobs
+    if (removedJobIds.has(jobId)) return;
+
+    set((state) => ({
+      jobs: state.jobs.map((j) =>
+        j.id === jobId
+          ? {
+              ...j,
+              status: status as Job['status'],
+              errorMessage,
+              ...(status === 'completed' ? { completedAt: new Date().toISOString() } : {}),
+            }
+          : j
+      ),
+      currentJob:
+        state.currentJob?.id === jobId
+          ? {
+              ...state.currentJob,
+              status: status as Job['status'],
+              errorMessage,
+              ...(status === 'completed' ? { completedAt: new Date().toISOString() } : {}),
+            }
           : state.currentJob,
     }));
   },

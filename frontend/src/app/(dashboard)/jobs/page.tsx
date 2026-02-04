@@ -7,7 +7,8 @@ import { useAuthStore } from '@/stores/auth.store';
 import { useJobsStore } from '@/stores/jobs.store';
 import { Button } from '@/components/ui/button';
 import { JobCard } from '@/components/jobs/job-card';
-import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { ArrowLeft, RefreshCw, WifiIcon, WifiOffIcon } from 'lucide-react';
+import { isConnected as checkSocketConnected } from '@/lib/socket';
 
 type StatusFilter = 'all' | 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -25,6 +26,7 @@ export default function JobsPage() {
   const { isAuthenticated, checkAuth } = useAuthStore();
   const { jobs, fetchJobs, isLoading, error } = useJobsStore();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [wsConnected, setWsConnected] = useState(false);
 
   useEffect(() => {
     const init = async () => {
@@ -37,6 +39,14 @@ export default function JobsPage() {
     };
     init();
   }, [checkAuth, router, fetchJobs]);
+
+  // Check WebSocket connection status
+  useEffect(() => {
+    const checkConnection = () => setWsConnected(checkSocketConnected());
+    checkConnection();
+    const interval = setInterval(checkConnection, 2000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleRefresh = () => {
     fetchJobs(statusFilter !== 'all' ? { status: statusFilter } : undefined);
@@ -73,10 +83,25 @@ export default function JobsPage() {
               View and manage your data exports
             </p>
           </div>
-          <Button variant="outline" onClick={handleRefresh} disabled={isLoading}>
-            <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-1.5 text-sm ${wsConnected ? 'text-green-600' : 'text-muted-foreground'}`}>
+              {wsConnected ? (
+                <>
+                  <WifiIcon className="w-4 h-4" />
+                  <span className="hidden sm:inline">Live updates</span>
+                </>
+              ) : (
+                <>
+                  <WifiOffIcon className="w-4 h-4" />
+                  <span className="hidden sm:inline">Connecting...</span>
+                </>
+              )}
+            </div>
+            <Button variant="outline" onClick={handleRefresh} disabled={isLoading}>
+              <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
         </div>
       </div>
 

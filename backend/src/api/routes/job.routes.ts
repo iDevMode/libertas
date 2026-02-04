@@ -5,6 +5,7 @@ import { authenticate } from '../middleware/auth.middleware.js';
 import { migrationQueue } from '../../jobs/queue.js';
 import { logger } from '../../common/logger.js';
 import { JobStatus, DestinationType } from '../../common/types.js';
+import { emitJobStatus } from '../../websocket/socket.js';
 
 const createJobSchema = z.object({
   connectionId: z.string().uuid(),
@@ -204,16 +205,83 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
       return;
     }
 
+    // Try to remove from BullMQ queue if pending
+    if (job.status === 'pending') {
+      try {
+        // Get all jobs in queue and find the one matching this jobId
+        const waitingJobs = await migrationQueue.getJobs(['waiting', 'delayed']);
+        for (const queueJob of waitingJobs) {
+          if (queueJob.data.jobId === id) {
+            await queueJob.remove();
+            logger.info({ jobId: id, bullmqJobId: queueJob.id }, 'Removed pending job from queue');
+            break;
+          }
+        }
+      } catch (err) {
+        logger.warn({ jobId: id, error: (err as Error).message }, 'Failed to remove job from queue');
+      }
+    }
+
     await prisma.migrationJob.update({
       where: { id },
       data: { status: 'cancelled' },
     });
+
+    // Emit cancellation via WebSocket
+    emitJobStatus(id, request.user!.id, { status: 'cancelled' });
 
     logger.info({ jobId: id }, 'Job cancelled');
 
     reply.send({
       success: true,
       data: { message: 'Job cancelled' },
+    });
+  });
+
+  // Delete a job (for completed/failed/cancelled jobs)
+  app.delete('/:id/delete', { preHandler: [authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const job = await prisma.migrationJob.findFirst({
+      where: {
+        id,
+        userId: request.user!.id,
+      },
+    });
+
+    if (!job) {
+      reply.status(404).send({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Job not found',
+        },
+      });
+      return;
+    }
+
+    // Only allow deleting completed, failed, or cancelled jobs
+    if (job.status === 'pending' || job.status === 'running') {
+      reply.status(400).send({
+        success: false,
+        error: {
+          code: 'INVALID_STATUS',
+          message: 'Cannot delete pending or running jobs. Cancel them first.',
+        },
+      });
+      return;
+    }
+
+    // Delete the job record
+    await prisma.migrationJob.delete({
+      where: { id },
+    });
+
+    logger.info({ jobId: id }, 'Job deleted');
+
+    reply.send({
+      success: true,
+      data: { message: 'Job deleted' },
     });
   });
 

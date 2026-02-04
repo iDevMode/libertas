@@ -1,23 +1,28 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { Job } from '@/lib/api';
+import { Job, api } from '@/lib/api';
 import {
   formatRelativeTime,
   getPlatformDisplayName,
   getStatusColor,
 } from '@/lib/utils';
 import { useJobsStore } from '@/stores/jobs.store';
-import { DownloadIcon, XIcon } from 'lucide-react';
+import { DownloadIcon, XIcon, Loader2Icon, Trash2Icon } from 'lucide-react';
+import { subscribeToJob, unsubscribeFromJob, isConnected } from '@/lib/socket';
 
 interface JobCardProps {
   job: Job;
 }
 
 export function JobCard({ job }: JobCardProps) {
-  const { cancelJob, isLoading } = useJobsStore();
+  const { cancelJob, deleteJob, isLoading } = useJobsStore();
+  const [wsConnected, setWsConnected] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const handleCancel = async () => {
     if (confirm('Are you sure you want to cancel this export?')) {
@@ -25,8 +30,44 @@ export function JobCard({ job }: JobCardProps) {
     }
   };
 
+  const handleDelete = async () => {
+    if (confirm('Are you sure you want to remove this export from the list?')) {
+      await deleteJob(job.id);
+    }
+  };
+
+  const handleDownload = async () => {
+    setIsDownloading(true);
+    setDownloadError(null);
+    try {
+      await api.downloadExport(job.id);
+    } catch (error) {
+      setDownloadError((error as Error).message);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const isRunning = job.status === 'running' || job.status === 'pending';
   const isCompleted = job.status === 'completed';
+
+  // Subscribe to WebSocket updates for running jobs
+  useEffect(() => {
+    if (!isRunning) return;
+
+    // Check connection status periodically
+    const checkConnection = () => setWsConnected(isConnected());
+    checkConnection();
+    const interval = setInterval(checkConnection, 1000);
+
+    // Subscribe to this job's updates
+    subscribeToJob(job.id);
+
+    return () => {
+      clearInterval(interval);
+      unsubscribeFromJob(job.id);
+    };
+  }, [job.id, isRunning]);
 
   return (
     <div className="border rounded-lg p-4">
@@ -40,13 +81,24 @@ export function JobCard({ job }: JobCardProps) {
             {formatRelativeTime(job.createdAt)}
           </p>
         </div>
-        <span
-          className={`text-xs px-2 py-1 rounded-full ${getStatusColor(
-            job.status
-          )}`}
-        >
-          {job.status}
-        </span>
+        <div className="flex items-center gap-2">
+          {isRunning && wsConnected && (
+            <span className="flex items-center gap-1 text-xs text-green-600">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+              </span>
+              Live
+            </span>
+          )}
+          <span
+            className={`text-xs px-2 py-1 rounded-full ${getStatusColor(
+              job.status
+            )}`}
+          >
+            {job.status}
+          </span>
+        </div>
       </div>
 
       {isRunning && (
@@ -66,14 +118,25 @@ export function JobCard({ job }: JobCardProps) {
         <p className="text-sm text-destructive mb-3">{job.errorMessage}</p>
       )}
 
+      {downloadError && (
+        <p className="text-sm text-destructive mb-3">{downloadError}</p>
+      )}
+
       <div className="flex gap-2">
         {isCompleted && (
-          <Link href={`/api/exports/${job.id}/file`} className="flex-1">
-            <Button className="w-full" size="sm">
+          <Button
+            className="flex-1"
+            size="sm"
+            onClick={handleDownload}
+            disabled={isDownloading}
+          >
+            {isDownloading ? (
+              <Loader2Icon className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
               <DownloadIcon className="w-4 h-4 mr-2" />
-              Download
-            </Button>
-          </Link>
+            )}
+            {isDownloading ? 'Downloading...' : 'Download'}
+          </Button>
         )}
 
         {isCompleted && (
@@ -93,6 +156,19 @@ export function JobCard({ job }: JobCardProps) {
           >
             <XIcon className="w-4 h-4 mr-2" />
             Cancel
+          </Button>
+        )}
+
+        {/* Delete button for completed, failed, or cancelled jobs */}
+        {!isRunning && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDelete}
+            disabled={isLoading}
+            className="text-muted-foreground hover:text-destructive"
+          >
+            <Trash2Icon className="w-4 h-4" />
           </Button>
         )}
       </div>
