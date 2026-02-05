@@ -197,6 +197,82 @@ class ApiClient {
     return this.request<EntityDetail>(`/api/exports/${jobId}/entities/${entityId}`);
   }
 
+  // Markdown
+  async getMarkdownFiles(jobId: string) {
+    return this.request<{ items: MarkdownFileInfo[] }>(
+      `/api/exports/${jobId}/markdown/files`
+    );
+  }
+
+  async getMarkdownFile(jobId: string, filename: string) {
+    return this.request<{ content: string; filename: string }>(
+      `/api/exports/${jobId}/markdown/files/${encodeURIComponent(filename)}`
+    );
+  }
+
+  // JSON
+  async getJsonExport(jobId: string) {
+    return this.request<{ data: unknown; size: number; truncated?: boolean }>(
+      `/api/exports/${jobId}/json`
+    );
+  }
+
+  // CSV
+  async getCsvFiles(jobId: string) {
+    return this.request<{ items: CsvFileInfo[] }>(
+      `/api/exports/${jobId}/csv/files`
+    );
+  }
+
+  async getCsvFileData(jobId: string, filename: string, params?: { limit?: number; offset?: number }) {
+    const query = new URLSearchParams(params as Record<string, string>).toString();
+    return this.request<{ headers: string[]; rows: string[][]; total: number; hasMore: boolean }>(
+      `/api/exports/${jobId}/csv/files/${encodeURIComponent(filename)}${query ? `?${query}` : ''}`
+    );
+  }
+
+  // Relational SQLite
+  async getRelationalTables(jobId: string) {
+    return this.request<{ tables: RelationalTableInfo[] }>(
+      `/api/exports/${jobId}/relational/tables`
+    );
+  }
+
+  async getRelationalTableData(
+    jobId: string,
+    tableName: string,
+    params?: { limit?: number; offset?: number; sort?: string; order?: string; filter?: string | string[] }
+  ) {
+    const searchParams = new URLSearchParams();
+    if (params?.limit) searchParams.set('limit', String(params.limit));
+    if (params?.offset) searchParams.set('offset', String(params.offset));
+    if (params?.sort) searchParams.set('sort', params.sort);
+    if (params?.order) searchParams.set('order', params.order);
+    if (params?.filter) {
+      const filters = Array.isArray(params.filter) ? params.filter : [params.filter];
+      filters.forEach(f => searchParams.append('filter', f));
+    }
+    const query = searchParams.toString();
+    return this.request<{
+      columns: { name: string; type: string }[];
+      rows: Record<string, unknown>[];
+      total: number;
+      hasMore: boolean;
+    }>(
+      `/api/exports/${jobId}/relational/tables/${encodeURIComponent(tableName)}${query ? `?${query}` : ''}`
+    );
+  }
+
+  async updateRelationalCell(jobId: string, tableName: string, rowId: string, column: string, value: unknown) {
+    return this.request<{ row: Record<string, unknown> }>(
+      `/api/exports/${jobId}/relational/tables/${encodeURIComponent(tableName)}/${encodeURIComponent(rowId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ column, value }),
+      }
+    );
+  }
+
   async downloadExport(jobId: string, filename?: string): Promise<void> {
     const headers: HeadersInit = {};
     if (this.token) {
@@ -349,4 +425,20 @@ export interface Attachment {
   file_type: string | null;
   file_size: number | null;
   source_url: string | null;
+}
+
+export interface MarkdownFileInfo {
+  filename: string;
+  size: number;
+}
+
+export interface CsvFileInfo {
+  filename: string;
+  rowCount: number;
+}
+
+export interface RelationalTableInfo {
+  name: string;
+  rowCount: number;
+  columns: { name: string; type: string }[];
 }
