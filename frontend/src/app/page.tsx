@@ -17,9 +17,9 @@ export default function Home() {
           <Link href="/login">
             <Button size="lg">Get Started</Button>
           </Link>
-          <Link href="https://github.com/data-liberation/platform" target="_blank">
+          <Link href="/pricing">
             <Button variant="outline" size="lg">
-              View on GitHub
+              View Pricing
             </Button>
           </Link>
         </div>
