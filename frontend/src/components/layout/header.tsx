@@ -40,9 +40,20 @@ export function Header() {
           >
             Exports
           </Link>
+          <Link
+            href="/pricing"
+            className="text-sm text-muted-foreground hover:text-foreground"
+          >
+            Pricing
+          </Link>
         </nav>
 
         <div className="flex items-center gap-4">
+          {user?.tier && user.tier !== 'community' && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium capitalize">
+              {user.tier}
+            </span>
+          )}
           <span className="text-sm text-muted-foreground">{user?.email}</span>
           <Button variant="outline" size="sm" onClick={handleLogout}>
             Sign out

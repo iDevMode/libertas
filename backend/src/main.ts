@@ -8,6 +8,7 @@ import { authRoutes } from './api/routes/auth.routes.js';
 import { connectionRoutes } from './api/routes/connection.routes.js';
 import { jobRoutes } from './api/routes/job.routes.js';
 import { exportRoutes } from './api/routes/export.routes.js';
+import { tierRoutes } from './api/routes/tier.routes.js';
 import { healthRoutes } from './api/routes/health.routes.js';
 import { errorHandler } from './api/middleware/error-handler.js';
 import { initializeJobWorkers } from './jobs/worker.js';
@@ -39,6 +40,7 @@ async function bootstrap(): Promise<void> {
   await app.register(connectionRoutes, { prefix: '/api/connections' });
   await app.register(jobRoutes, { prefix: '/api/jobs' });
   await app.register(exportRoutes, { prefix: '/api/exports' });
+  await app.register(tierRoutes, { prefix: '/api/tiers' });
 
   // Initialize job workers
   await initializeJobWorkers();

@@ -4,8 +4,9 @@ import { prisma } from '../../common/database.js';
 import { authenticate } from '../middleware/auth.middleware.js';
 import { migrationQueue } from '../../jobs/queue.js';
 import { logger } from '../../common/logger.js';
-import { JobStatus, DestinationType } from '../../common/types.js';
+import { JobStatus, DestinationType, SubscriptionTier } from '../../common/types.js';
 import { emitJobStatus } from '../../websocket/socket.js';
+import { getTierLimits, isDestinationAllowed, isUnlimited } from '../../common/tier-config.js';
 
 const createJobSchema = z.object({
   connectionId: z.string().uuid(),
@@ -14,9 +15,6 @@ const createJobSchema = z.object({
   includeAttachments: z.boolean().default(false),
   options: z.record(z.unknown()).optional(),
 });
-
-// Pro tier destination types
-const PRO_DESTINATION_TYPES = ['relational_sqlite'];
 
 export async function jobRoutes(app: FastifyInstance): Promise<void> {
   // Create a new export job
@@ -43,18 +41,87 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
 
-      // Check Pro tier requirement for Pro destination types
-      if (PRO_DESTINATION_TYPES.includes(input.destinationType)) {
-        if (request.user!.tier === 'community') {
+      const tier = request.user!.tier as SubscriptionTier;
+      const limits = getTierLimits(tier);
+
+      // Check destination type allowed for tier
+      if (!isDestinationAllowed(tier, input.destinationType as DestinationType)) {
+        reply.status(403).send({
+          success: false,
+          error: {
+            code: 'TIER_LIMIT',
+            message: `${input.destinationType} export requires a Pro or Enterprise subscription`,
+          },
+        });
+        return;
+      }
+
+      // Check attachment permission
+      if (input.includeAttachments && !limits.includeAttachments) {
+        reply.status(403).send({
+          success: false,
+          error: {
+            code: 'TIER_LIMIT',
+            message: 'File attachment export requires a Pro or Enterprise subscription',
+          },
+        });
+        return;
+      }
+
+      // Check record limit per export
+      if (!isUnlimited(limits.recordsPerExport) && input.selectedEntities.length > limits.recordsPerExport) {
+        reply.status(403).send({
+          success: false,
+          error: {
+            code: 'TIER_LIMIT',
+            message: `Your plan allows up to ${limits.recordsPerExport.toLocaleString()} records per export. Selected: ${input.selectedEntities.length.toLocaleString()}. Upgrade for higher limits.`,
+          },
+        });
+        return;
+      }
+
+      // Check monthly export quota
+      if (!isUnlimited(limits.exportsPerMonth)) {
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+
+        const exportsThisMonth = await prisma.migrationJob.count({
+          where: {
+            userId: request.user!.id,
+            createdAt: { gte: startOfMonth },
+          },
+        });
+
+        if (exportsThisMonth >= limits.exportsPerMonth) {
           reply.status(403).send({
             success: false,
             error: {
-              code: 'FORBIDDEN',
-              message: 'Relational SQLite export requires Pro subscription',
+              code: 'TIER_LIMIT',
+              message: `Monthly export limit reached (${limits.exportsPerMonth}). Upgrade for unlimited exports.`,
             },
           });
           return;
         }
+      }
+
+      // Check concurrent job limit
+      const runningJobs = await prisma.migrationJob.count({
+        where: {
+          userId: request.user!.id,
+          status: { in: ['pending', 'running'] },
+        },
+      });
+
+      if (runningJobs >= limits.concurrentJobs) {
+        reply.status(403).send({
+          success: false,
+          error: {
+            code: 'TIER_LIMIT',
+            message: `Concurrent job limit reached (${limits.concurrentJobs}). Wait for current jobs to complete or upgrade your plan.`,
+          },
+        });
+        return;
       }
 
       // Create job record

@@ -1,6 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import { prisma } from '../../common/database.js';
 import { authenticate } from '../middleware/auth.middleware.js';
+import { SubscriptionTier } from '../../common/types.js';
+import { getTierLimits } from '../../common/tier-config.js';
 import Database from 'better-sqlite3';
 import { createReadStream } from 'fs';
 import { stat, readdir, readFile } from 'fs/promises';
@@ -556,6 +558,20 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
   app.put('/:jobId/relational/tables/:tableName/:rowId', { preHandler: [authenticate] }, async (request, reply) => {
     const { jobId, tableName, rowId } = request.params as { jobId: string; tableName: string; rowId: string };
     const { column, value } = request.body as { column: string; value: unknown };
+
+    // Check tier allows cell editing
+    const tier = request.user!.tier as SubscriptionTier;
+    const limits = getTierLimits(tier);
+    if (!limits.allowCellEditing) {
+      reply.status(403).send({
+        success: false,
+        error: {
+          code: 'TIER_LIMIT',
+          message: 'Cell editing requires a Pro or Enterprise subscription',
+        },
+      });
+      return;
+    }
 
     const job = await findCompletedJob(jobId, request.user!.id);
     if (!job || !job.outputPath) {

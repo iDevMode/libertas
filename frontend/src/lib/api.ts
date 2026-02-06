@@ -309,11 +309,59 @@ class ApiClient {
     window.URL.revokeObjectURL(url);
     document.body.removeChild(a);
   }
+
+  // Tiers
+  async getTiers() {
+    return this.request<{ tiers: TierInfo[] }>('/api/tiers');
+  }
+
+  async getTierUsage() {
+    return this.request<TierUsage>('/api/tiers/usage');
+  }
 }
 
 export const api = new ApiClient(API_URL);
 
 // Types
+export interface TierLimits {
+  recordsPerExport: number;
+  exportsPerMonth: number;
+  connectedAccountsPerPlatform: number;
+  concurrentJobs: number;
+  includeAttachments: boolean;
+  exportHistoryDays: number;
+  allowedDestinations: string[];
+  allowCellEditing: boolean;
+}
+
+export interface TierInfo {
+  name: string;
+  displayName: string;
+  price: number;
+  billingPeriod: string;
+  description: string;
+  highlights: string[];
+  limits: TierLimits;
+}
+
+export interface TierUsage {
+  tier: string;
+  limits: {
+    recordsPerExport: number;
+    exportsPerMonth: number;
+    connectedAccountsPerPlatform: number;
+    concurrentJobs: number;
+    includeAttachments: boolean;
+    allowCellEditing: boolean;
+  };
+  usage: {
+    exportsThisMonth: number;
+    exportsRemaining: number;
+    runningJobs: number;
+    connectionsPerPlatform: Record<string, number>;
+  };
+}
+
 export interface User {
   id: string;
   email: string;
