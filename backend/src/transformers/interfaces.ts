@@ -42,7 +42,8 @@ export interface NormalizedContentBlock {
   id: string;
   entityId: string;
   blockType: BlockType;
-  content?: string;
+  /** null for blocks with no text (dividers, empty media); SQLite destinations store it as NULL. */
+  content?: string | null;
   position: number;
   parentBlockId?: string;
   metadata?: Record<string, unknown>;
@@ -81,10 +82,11 @@ export interface INormalizer {
 }
 
 /**
- * Universal normalizer that delegates to platform-specific normalizers
+ * Universal normalizer that delegates to platform-specific normalizers.
+ * One raw extract can yield several entities: an Airtable table yields the table plus its records.
  */
 export interface IUniversalNormalizer {
-  normalize(raw: RawEntity, platform: Platform): NormalizedResult;
+  normalize(raw: RawEntity, platform: Platform): NormalizedResult[];
 }
 
 // Database schema types for relational export (Pro feature)

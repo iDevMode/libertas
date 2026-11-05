@@ -7,7 +7,12 @@ export type DestinationType = 'sqlite' | 'postgresql' | 'json' | 'csv' | 'markdo
 export type EntityType = 'page' | 'database' | 'record' | 'task' | 'document' | 'row';
 export type PropertyType = 'text' | 'number' | 'date' | 'boolean' | 'select' | 'multi_select' | 'relation' | 'file' | 'url' | 'email' | 'phone' | 'formula' | 'rollup';
 export type RelationType = 'parent_of' | 'child_of' | 'related_to' | 'assigned_to' | 'mentions' | 'linked_to';
-export type BlockType = 'paragraph' | 'heading_1' | 'heading_2' | 'heading_3' | 'bulleted_list' | 'numbered_list' | 'toggle' | 'code' | 'quote' | 'callout' | 'image' | 'video' | 'file' | 'divider' | 'table' | 'table_row';
+export type BlockType =
+  | 'paragraph' | 'heading_1' | 'heading_2' | 'heading_3'
+  | 'bulleted_list' | 'bulleted_list_item' | 'numbered_list' | 'numbered_list_item' | 'to_do'
+  | 'toggle' | 'code' | 'quote' | 'callout' | 'divider'
+  | 'image' | 'video' | 'file' | 'embed' | 'bookmark'
+  | 'table' | 'table_row' | 'table_of_contents' | 'child_page' | 'child_database';
 
 // API Response types
 export interface ApiResponse<T> {
