@@ -94,4 +94,24 @@ describe('convertToRelationalSchema', () => {
     expect(result.properties[0].columnName).toBe('select_col');
     expect(result.properties[1].columnName).toBe('order_col');
   });
+
+  it('should not reuse the built-in id, title and date columns', () => {
+    const result = convertToRelationalSchema('db-123', 'Tasks', [
+      { id: 'prop-1', name: 'Title', type: 'text' },
+      { id: 'prop-2', name: 'ID', type: 'number' },
+      { id: 'prop-3', name: 'Created at', type: 'date' },
+    ]);
+
+    expect(result.properties.map((p) => p.columnName)).toEqual(['title_prop', 'id_prop', 'created_at_prop']);
+  });
+
+  it('should keep columns unique when two names sanitise the same way', () => {
+    const result = convertToRelationalSchema('db-123', 'Tasks', [
+      { id: 'prop-1', name: 'Due date', type: 'date' },
+      { id: 'prop-2', name: 'Due-date', type: 'date' },
+      { id: 'prop-3', name: 'Due_date', type: 'date' },
+    ]);
+
+    expect(result.properties.map((p) => p.columnName)).toEqual(['due_date', 'due_date_2', 'due_date_3']);
+  });
 });
