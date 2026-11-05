@@ -5,6 +5,8 @@ import { IIdMapStore } from './id-map.interfaces.js';
 /** A source link whose both ends now exist in the destination. */
 export interface ResolvedLink {
   relationId: string;
+  fromEntityId: string;
+  toEntityId: string;
   fromTargetId: string;
   toTargetId: string;
   relationType: RelationType;
@@ -54,6 +56,8 @@ export function resolveRelations(
     if (fromTargetId && toTargetId) {
       result.resolved.push({
         relationId: relation.id,
+        fromEntityId: relation.fromEntityId,
+        toEntityId: relation.toEntityId,
         fromTargetId,
         toTargetId,
         relationType: relation.relationType,

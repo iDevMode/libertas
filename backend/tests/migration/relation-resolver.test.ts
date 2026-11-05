@@ -29,6 +29,8 @@ describe('resolveRelations', () => {
     expect(resolved).toHaveLength(links.length);
     expect(resolved).toContainEqual({
       relationId: expect.stringContaining(REC.ada),
+      fromEntityId: REC.launch,
+      toEntityId: REC.ada,
       fromTargetId: `page-${REC.launch}`,
       toTargetId: `page-${REC.ada}`,
       relationType: 'related_to',
