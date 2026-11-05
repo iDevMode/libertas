@@ -5,7 +5,7 @@ import { logger } from '../common/logger.js';
 import { config } from '../common/config.js';
 import { MigrationJobData } from './queue.js';
 import { ConnectorFactory } from '../connectors/index.js';
-import { universalNormalizer } from '../transformers/index.js';
+import { universalNormalizer, NormalizedRelation } from '../transformers/index.js';
 import {
   DestinationFactory,
   DestinationConfig,
@@ -151,6 +151,9 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
       let processed = 0;
       let lastProgressUpdate = Date.now();
       const PROGRESS_UPDATE_INTERVAL = 500; // Update progress every 500ms max
+      // Links can point at records extracted later (e.g. Clients -> Projects), so they are
+      // written once every entity exists.
+      const pendingRelations: NormalizedRelation[] = [];
 
       // Extract and process each entity (pages within selected databases)
       for await (const rawEntity of connector.extractBatch(token, selectedEntities)) {
@@ -168,18 +171,18 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
           }
         }
 
-        // Normalize entity
-        const normalized = universalNormalizer.normalize(rawEntity, sourceAccount.platform as Platform);
+        // Normalize: one extract can yield several entities (an Airtable table yields its records)
+        const results = universalNormalizer.normalize(rawEntity, sourceAccount.platform as Platform);
 
-        // Write to destination
-        await destination.writeEntities([normalized.entity]);
-        await destination.writeProperties(normalized.properties);
-        await destination.writeRelations(normalized.relations);
-        await destination.writeContentBlocks(normalized.contentBlocks);
-        await destination.writeAttachments(normalized.attachments);
+        // Write entities first: destinations place properties by the entity they belong to
+        await destination.writeEntities(results.map((r) => r.entity));
+        await destination.writeProperties(results.flatMap((r) => r.properties));
+        pendingRelations.push(...results.flatMap((r) => r.relations));
+        await destination.writeContentBlocks(results.flatMap((r) => r.contentBlocks));
+        await destination.writeAttachments(results.flatMap((r) => r.attachments));
 
         // Update progress (throttled)
-        processed++;
+        processed += results.length;
         const now = Date.now();
         if (now - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL) {
           lastProgressUpdate = now;
@@ -202,6 +205,14 @@ async function processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
 
           logger.debug({ jobId, processed }, 'Job progress');
         }
+      }
+
+      const relationResult = await destination.writeRelations(pendingRelations);
+      if (relationResult.failed > 0) {
+        logger.warn(
+          { jobId, failed: relationResult.failed, sample: relationResult.errors?.slice(0, 5) },
+          'Some links point outside the export and were skipped'
+        );
       }
 
       // Commit transaction

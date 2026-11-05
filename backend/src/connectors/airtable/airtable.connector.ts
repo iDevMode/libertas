@@ -8,18 +8,38 @@ import {
   RawEntity,
   RateLimitConfig,
   ConnectorCapabilities,
+  PropertySchema,
 } from '../interfaces.js';
 import { config } from '../../common/config.js';
 import { logger } from '../../common/logger.js';
+import { mapAirtableFieldType } from './airtable.field-types.js';
+import {
+  AirtableBase,
+  AirtableErrorResponse,
+  AirtableFieldSchema,
+  AirtableListBasesResponse,
+  AirtableListRecordsResponse,
+  AirtableListTablesResponse,
+  AirtableRecord,
+  AirtableTableExtract,
+  AirtableTableSchema,
+  AirtableTokenResponse,
+} from './airtable.types.js';
 
 const AIRTABLE_API_BASE = 'https://api.airtable.com/v0';
 const AIRTABLE_OAUTH_BASE = 'https://airtable.com/oauth2/v1';
+/** Airtable asks clients to wait 30 seconds after a 429 before retrying. */
+const RATE_LIMIT_WAIT_MS = 30_000;
+const MAX_RATE_LIMIT_RETRIES = 3;
 
 export class AirtableConnector extends BaseConnector {
   readonly name = 'airtable';
   readonly platform = 'airtable' as const;
-  readonly version = '1.0.0';
+  readonly version = '1.1.0';
   readonly tier = 'community' as const;
+
+  /** Overridable in tests so rate-limit retries don't actually wait. */
+  protected rateLimitWaitMs = RATE_LIMIT_WAIT_MS;
 
   getAuthorizationUrl(state: string): string {
     const params = new URLSearchParams({
@@ -34,39 +54,20 @@ export class AirtableConnector extends BaseConnector {
   }
 
   async authenticate(credentials: OAuthCredentials): Promise<AuthToken> {
-    const basicAuth = Buffer.from(
-      `${config.airtableClientId}:${config.airtableClientSecret}`
-    ).toString('base64');
-
-    const response = await fetch(`${AIRTABLE_OAUTH_BASE}/token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Basic ${basicAuth}`,
-      },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code: credentials.code,
-        redirect_uri: credentials.redirectUri,
-        code_verifier: credentials.state || '',
-      }),
+    const response = await this.requestToken({
+      grant_type: 'authorization_code',
+      code: credentials.code,
+      redirect_uri: credentials.redirectUri,
+      code_verifier: credentials.state || '',
     });
 
     if (!response.ok) {
-      const error = await response.json();
+      const error = (await response.json()) as AirtableErrorResponse;
       logger.error({ error }, 'Airtable OAuth failed');
-      throw new Error(`Airtable authentication failed: ${error.error}`);
+      throw new Error(`Airtable authentication failed: ${describeError(error)}`);
     }
 
-    const data = await response.json();
-
-    return {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      expiresAt: new Date(Date.now() + data.expires_in * 1000),
-      tokenType: data.token_type,
-      scope: data.scope,
-    };
+    return toAuthToken((await response.json()) as AirtableTokenResponse);
   }
 
   async refreshToken(token: AuthToken): Promise<AuthToken> {
@@ -74,35 +75,16 @@ export class AirtableConnector extends BaseConnector {
       throw new Error('No refresh token available');
     }
 
-    const basicAuth = Buffer.from(
-      `${config.airtableClientId}:${config.airtableClientSecret}`
-    ).toString('base64');
-
-    const response = await fetch(`${AIRTABLE_OAUTH_BASE}/token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Basic ${basicAuth}`,
-      },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: token.refreshToken,
-      }),
+    const response = await this.requestToken({
+      grant_type: 'refresh_token',
+      refresh_token: token.refreshToken,
     });
 
     if (!response.ok) {
       throw new Error('Failed to refresh Airtable token');
     }
 
-    const data = await response.json();
-
-    return {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      expiresAt: new Date(Date.now() + data.expires_in * 1000),
-      tokenType: data.token_type,
-      scope: data.scope,
-    };
+    return toAuthToken((await response.json()) as AirtableTokenResponse);
   }
 
   async revokeToken(_token: AuthToken): Promise<void> {
@@ -111,33 +93,16 @@ export class AirtableConnector extends BaseConnector {
   }
 
   async discoverSchema(token: AuthToken): Promise<SourceSchema> {
-    // First, list all bases
-    const basesResponse = await this.makeRequest(
-      token,
-      'https://api.airtable.com/v0/meta/bases'
-    );
-    const basesData = await basesResponse.json();
-
+    const bases = await this.listBases(token);
     const databases: SourceSchema['databases'] = [];
 
-    for (const base of basesData.bases) {
-      // Get schema for each base
-      const schemaResponse = await this.makeRequest(
-        token,
-        `https://api.airtable.com/v0/meta/bases/${base.id}/tables`
-      );
-      const schemaData = await schemaResponse.json();
-
-      for (const table of schemaData.tables) {
+    for (const base of bases) {
+      const tables = await this.listTables(token, base.id);
+      for (const table of tables) {
         databases.push({
           id: `${base.id}/${table.id}`,
           title: `${base.name} / ${table.name}`,
-          properties: table.fields.map((field: { id: string; name: string; type: string; options?: { choices?: Array<{ id: string; name: string; color?: string }> } }) => ({
-            id: field.id,
-            name: field.name,
-            type: this.mapAirtableFieldType(field.type),
-            options: field.options?.choices,
-          })),
+          properties: table.fields.map((field) => toPropertySchema(base.id, field)),
         });
       }
     }
@@ -146,13 +111,8 @@ export class AirtableConnector extends BaseConnector {
   }
 
   async listEntities(token: AuthToken, filter?: EntityFilter): Promise<EntityList> {
-    const basesResponse = await this.makeRequest(
-      token,
-      'https://api.airtable.com/v0/meta/bases'
-    );
-    const basesData = await basesResponse.json();
-
-    const items = basesData.bases.map((base: { id: string; name: string }) => ({
+    const bases = await this.listBases(token);
+    const items = bases.map((base) => ({
       id: base.id,
       type: 'database' as const,
       title: base.name,
@@ -164,32 +124,21 @@ export class AirtableConnector extends BaseConnector {
     };
   }
 
+  /**
+   * Extracts one table, identified as "baseId/tableId", with its field schema.
+   * Records are keyed by field ID so renamed fields still map correctly.
+   */
   async extractEntity(token: AuthToken, id: string): Promise<RawEntity> {
     const [baseId, tableId] = id.split('/');
+    if (!baseId || !tableId) {
+      throw new Error(`Airtable entity ID must be "baseId/tableId", got "${id}"`);
+    }
 
-    const records: unknown[] = [];
-    let offset: string | undefined;
+    const table = await this.findTableSchema(token, baseId, tableId);
+    const records = await this.listRecords(token, baseId, tableId);
+    const rawData: AirtableTableExtract = { baseId, tableId, table, records };
 
-    do {
-      const params = new URLSearchParams();
-      if (offset) params.set('offset', offset);
-
-      const response = await this.makeRequest(
-        token,
-        `${AIRTABLE_API_BASE}/${baseId}/${tableId}?${params.toString()}`
-      );
-      const data = await response.json();
-
-      records.push(...data.records);
-      offset = data.offset;
-    } while (offset);
-
-    return {
-      id,
-      type: 'table',
-      rawData: { baseId, tableId, records },
-      extractedAt: new Date(),
-    };
+    return { id, type: 'table', rawData, extractedAt: new Date() };
   }
 
   getRateLimits(): RateLimitConfig {
@@ -211,36 +160,132 @@ export class AirtableConnector extends BaseConnector {
     };
   }
 
-  private async makeRequest(token: AuthToken, url: string): Promise<Response> {
-    return fetch(url, {
+  private async listBases(token: AuthToken): Promise<AirtableBase[]> {
+    const bases: AirtableBase[] = [];
+    let offset: string | undefined;
+
+    do {
+      const params = new URLSearchParams();
+      if (offset) params.set('offset', offset);
+      const data = await this.getJson<AirtableListBasesResponse>(
+        token,
+        `${AIRTABLE_API_BASE}/meta/bases?${params.toString()}`
+      );
+      bases.push(...data.bases);
+      offset = data.offset;
+    } while (offset);
+
+    return bases;
+  }
+
+  private async listTables(token: AuthToken, baseId: string): Promise<AirtableTableSchema[]> {
+    const data = await this.getJson<AirtableListTablesResponse>(
+      token,
+      `${AIRTABLE_API_BASE}/meta/bases/${baseId}/tables`
+    );
+    return data.tables;
+  }
+
+  /** Returns undefined (rather than failing) when the token lacks schema access. */
+  private async findTableSchema(
+    token: AuthToken,
+    baseId: string,
+    tableId: string
+  ): Promise<AirtableTableSchema | undefined> {
+    try {
+      const tables = await this.listTables(token, baseId);
+      return tables.find((table) => table.id === tableId || table.name === tableId);
+    } catch (error) {
+      logger.warn(
+        { baseId, tableId, error: (error as Error).message },
+        'Airtable schema unavailable'
+      );
+      return undefined;
+    }
+  }
+
+  private async listRecords(
+    token: AuthToken,
+    baseId: string,
+    tableId: string
+  ): Promise<AirtableRecord[]> {
+    const records: AirtableRecord[] = [];
+    let offset: string | undefined;
+
+    do {
+      const params = new URLSearchParams({ returnFieldsByFieldId: 'true' });
+      if (offset) params.set('offset', offset);
+      const data = await this.getJson<AirtableListRecordsResponse>(
+        token,
+        `${AIRTABLE_API_BASE}/${baseId}/${tableId}?${params.toString()}`
+      );
+      records.push(...data.records);
+      offset = data.offset;
+    } while (offset);
+
+    return records;
+  }
+
+  /** GET with Bearer auth, retrying on 429 and throwing on any other failure. */
+  private async getJson<T>(token: AuthToken, url: string): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token.accessToken}` },
+      });
+
+      if (response.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+        logger.warn({ url, attempt }, 'Airtable rate limit hit, waiting before retry');
+        await this.delay(this.rateLimitWaitMs);
+        continue;
+      }
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as AirtableErrorResponse;
+        throw new Error(`Airtable request failed (${response.status}): ${describeError(body)}`);
+      }
+
+      return (await response.json()) as T;
+    }
+  }
+
+  private requestToken(body: Record<string, string>): Promise<Response> {
+    const basicAuth = Buffer.from(
+      `${config.airtableClientId}:${config.airtableClientSecret}`
+    ).toString('base64');
+
+    return fetch(`${AIRTABLE_OAUTH_BASE}/token`, {
+      method: 'POST',
       headers: {
-        Authorization: `Bearer ${token.accessToken}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Basic ${basicAuth}`,
       },
+      body: new URLSearchParams(body),
     });
   }
+}
 
-  private mapAirtableFieldType(airtableType: string): 'text' | 'number' | 'date' | 'boolean' | 'select' | 'multi_select' | 'relation' | 'file' | 'url' | 'email' | 'phone' | 'formula' | 'rollup' {
-    const typeMap: Record<string, 'text' | 'number' | 'date' | 'boolean' | 'select' | 'multi_select' | 'relation' | 'file' | 'url' | 'email' | 'phone' | 'formula' | 'rollup'> = {
-      singleLineText: 'text',
-      multilineText: 'text',
-      richText: 'text',
-      number: 'number',
-      currency: 'number',
-      percent: 'number',
-      singleSelect: 'select',
-      multipleSelects: 'multi_select',
-      date: 'date',
-      dateTime: 'date',
-      checkbox: 'boolean',
-      url: 'url',
-      email: 'email',
-      phone: 'phone',
-      multipleRecordLinks: 'relation',
-      multipleAttachments: 'file',
-      formula: 'formula',
-      rollup: 'rollup',
-    };
+function toPropertySchema(baseId: string, field: AirtableFieldSchema): PropertySchema {
+  const linkedTableId = field.options?.linkedTableId;
+  return {
+    id: field.id,
+    name: field.name,
+    type: mapAirtableFieldType(field.type),
+    options: field.options?.choices,
+    relationTargetDatabaseId: linkedTableId ? `${baseId}/${linkedTableId}` : undefined,
+  };
+}
 
-    return typeMap[airtableType] || 'text';
-  }
+function toAuthToken(data: AirtableTokenResponse): AuthToken {
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    expiresAt: new Date(Date.now() + data.expires_in * 1000),
+    tokenType: data.token_type,
+    scope: data.scope,
+  };
+}
+
+function describeError(body: AirtableErrorResponse): string {
+  if (typeof body.error === 'string') return body.error;
+  return body.error?.message ?? body.error?.type ?? 'unknown error';
 }

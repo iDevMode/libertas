@@ -221,24 +221,32 @@ export class SQLiteAdapter implements IDestinationAdapter {
     `);
 
     let inserted = 0;
+    let failed = 0;
+    const errors: Array<{ id: string; error: string }> = [];
 
     for (const prop of properties) {
-      stmt.run({
-        id: prop.id,
-        entityId: prop.entityId,
-        propertyName: prop.propertyName,
-        propertyType: prop.propertyType,
-        valueText: prop.valueText,
-        valueNumber: prop.valueNumber,
-        valueDate: prop.valueDate?.toISOString(),
-        valueBoolean: prop.valueBoolean !== undefined ? (prop.valueBoolean ? 1 : 0) : null,
-        valueJson: prop.valueJson ? JSON.stringify(prop.valueJson) : null,
-        position: prop.position,
-      });
-      inserted++;
+      try {
+        stmt.run({
+          id: prop.id,
+          entityId: prop.entityId,
+          propertyName: prop.propertyName,
+          propertyType: prop.propertyType,
+          valueText: prop.valueText,
+          valueNumber: prop.valueNumber,
+          valueDate: prop.valueDate?.toISOString(),
+          valueBoolean: prop.valueBoolean !== undefined ? (prop.valueBoolean ? 1 : 0) : null,
+          valueJson: prop.valueJson ? JSON.stringify(prop.valueJson) : null,
+          position: prop.position,
+        });
+        inserted++;
+      } catch (err) {
+        // e.g. the owning entity failed to write; report it rather than abort the export
+        failed++;
+        errors.push({ id: prop.id, error: (err as Error).message });
+      }
     }
 
-    return { inserted, updated: 0, failed: 0 };
+    return { inserted, updated: 0, failed, errors: errors.length > 0 ? errors : undefined };
   }
 
   async writeRelations(relations: NormalizedRelation[]): Promise<WriteResult> {
@@ -250,19 +258,27 @@ export class SQLiteAdapter implements IDestinationAdapter {
     `);
 
     let inserted = 0;
+    let failed = 0;
+    const errors: Array<{ id: string; error: string }> = [];
 
     for (const rel of relations) {
-      stmt.run({
-        id: rel.id,
-        fromEntityId: rel.fromEntityId,
-        toEntityId: rel.toEntityId,
-        relationType: rel.relationType,
-        metadata: rel.metadata ? JSON.stringify(rel.metadata) : null,
-      });
-      inserted++;
+      try {
+        stmt.run({
+          id: rel.id,
+          fromEntityId: rel.fromEntityId,
+          toEntityId: rel.toEntityId,
+          relationType: rel.relationType,
+          metadata: rel.metadata ? JSON.stringify(rel.metadata) : null,
+        });
+        inserted++;
+      } catch (err) {
+        // A link to something outside the export breaks the foreign key; report, don't abort
+        failed++;
+        errors.push({ id: rel.id, error: (err as Error).message });
+      }
     }
 
-    return { inserted, updated: 0, failed: 0 };
+    return { inserted, updated: 0, failed, errors: errors.length > 0 ? errors : undefined };
   }
 
   async writeContentBlocks(blocks: NormalizedContentBlock[]): Promise<WriteResult> {

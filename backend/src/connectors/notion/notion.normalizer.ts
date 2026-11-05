@@ -1,4 +1,5 @@
 import { RawEntity } from '../interfaces.js';
+import { BlockType } from '../../common/types.js';
 import {
   NormalizedEntity,
   NormalizedProperty,
@@ -323,10 +324,10 @@ export class NotionNormalizer implements INormalizer {
         };
 
       default:
-        // For unsupported block types, store raw data
+        // For unsupported block types, keep Notion's type name and store raw data
         return {
           ...base,
-          blockType: block.type,
+          blockType: block.type as BlockType,
           content: null,
           metadata: { raw: block },
         };

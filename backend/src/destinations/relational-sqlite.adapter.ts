@@ -191,8 +191,9 @@ export class RelationalSQLiteAdapter implements IDestinationAdapter {
       if (prop.type === 'relation' && prop.relationTargetDatabaseId) {
         const targetSchema = this.databaseSchemas.get(prop.relationTargetDatabaseId);
         if (targetSchema) {
+          // Deferred: a link may point at a record in a table that is written later
           foreignKeys.push(
-            `FOREIGN KEY (${prop.columnName}) REFERENCES ${targetSchema.tableName}(id)`
+            `FOREIGN KEY (${prop.columnName}) REFERENCES ${targetSchema.tableName}(id) DEFERRABLE INITIALLY DEFERRED`
           );
         }
       }
@@ -278,7 +279,37 @@ export class RelationalSQLiteAdapter implements IDestinationAdapter {
 
   async commit(_transaction: Transaction): Promise<void> {
     if (!this.db) throw new Error('Database not connected');
+    this.clearDanglingReferences();
     this.db.exec('COMMIT');
+  }
+
+  /**
+   * Links to records outside the export would fail the deferred foreign keys at COMMIT and
+   * lose the whole export, so they are cleared (and logged) first.
+   */
+  private clearDanglingReferences(): void {
+    if (!this.db) return;
+    const violations = this.db.prepare('PRAGMA foreign_key_check').all() as Array<{
+      table: string;
+      rowid: number;
+      parent: string;
+      fkid: number;
+    }>;
+
+    for (const violation of violations) {
+      const keys = this.db.prepare(`PRAGMA foreign_key_list(${violation.table})`).all() as Array<{
+        id: number;
+        from: string;
+      }>;
+      const key = keys.find((k) => k.id === violation.fkid);
+      if (!key) continue;
+
+      this.db.prepare(`UPDATE ${violation.table} SET ${key.from} = NULL WHERE rowid = ?`).run(violation.rowid);
+      logger.warn(
+        { table: violation.table, column: key.from, rowid: violation.rowid, target: violation.parent },
+        'Cleared a link to a record outside the export'
+      );
+    }
   }
 
   async rollback(_transaction: Transaction): Promise<void> {
@@ -561,6 +592,7 @@ export function convertToRelationalSchema(
     relationTargetDatabaseId?: string;
   }>
 ): RelationalDatabaseSchema {
+  const usedColumns = new Set(BASE_COLUMNS);
   return {
     id,
     name: title,
@@ -568,9 +600,25 @@ export function convertToRelationalSchema(
     properties: properties.map(prop => ({
       id: prop.id,
       name: prop.name,
-      columnName: sanitizeSQLIdentifier(prop.name),
+      columnName: uniqueColumnName(sanitizeSQLIdentifier(prop.name), usedColumns),
       type: prop.type,
       relationTargetDatabaseId: prop.relationTargetDatabaseId,
     })),
   };
+}
+
+/** Columns every database table already has (see createDatabaseTable). */
+const BASE_COLUMNS = ['id', 'title', 'created_at', 'updated_at', 'source_url'];
+
+/**
+ * Keeps column names unique within a table: a property called "Title" or "ID" would
+ * otherwise collide with a base column, and "Due date" / "Due-date" with each other.
+ */
+function uniqueColumnName(column: string, used: Set<string>): string {
+  let candidate = BASE_COLUMNS.includes(column) ? `${column}_prop` : column;
+  for (let n = 2; used.has(candidate); n++) {
+    candidate = `${column}_${n}`;
+  }
+  used.add(candidate);
+  return candidate;
 }
