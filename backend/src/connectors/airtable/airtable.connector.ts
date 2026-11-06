@@ -178,7 +178,7 @@ export class AirtableConnector extends BaseConnector {
     return bases;
   }
 
-  private async listTables(token: AuthToken, baseId: string): Promise<AirtableTableSchema[]> {
+  async listTables(token: AuthToken, baseId: string): Promise<AirtableTableSchema[]> {
     const data = await this.getJson<AirtableListTablesResponse>(
       token,
       `${AIRTABLE_API_BASE}/meta/bases/${baseId}/tables`

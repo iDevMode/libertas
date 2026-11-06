@@ -20,7 +20,8 @@
     "migrate:rollback": "prisma migrate resolve --rolled-back",
     "db:generate": "prisma generate",
     "db:seed": "ts-node prisma/seed.ts",
-    "generate:connector": "ts-node scripts/generate-connector.ts"
+    "generate:connector": "ts-node scripts/generate-connector.ts",
+    "airtable-to-notion": "tsx scripts/airtable-to-notion.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
