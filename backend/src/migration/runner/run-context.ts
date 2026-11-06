@@ -93,6 +93,7 @@ export class RunContext {
     this.report.complete =
       this.report.failures.length === 0 &&
       this.report.links.unresolved === 0 &&
+      this.report.links.truncated === 0 &&
       this.report.tables.every((t) => t.records.failed === 0);
     return this.report;
   }

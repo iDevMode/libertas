@@ -31,6 +31,10 @@ export class FakeNotionWriter implements INotionWriter {
   failAddProperties?: Failure;
   failCreatePage?: Failure;
   failUpdatePage?: Failure;
+  /** Saves the object, then fails: what a 5xx after a successful write looks like. */
+  failCreateDatabaseAfterSaving?: Failure;
+  failCreatePageAfterSaving?: Failure;
+  failFind?: () => Error | undefined;
   private counter = 0;
 
   async createDatabase(input: CreateDatabaseInput): Promise<CreatedDatabase> {
@@ -45,6 +49,7 @@ export class FakeNotionWriter implements INotionWriter {
       schema: { ...input.properties } as Properties,
     };
     this.databases.push(db);
+    this.maybeFail(this.failCreateDatabaseAfterSaving, input.title, input.properties);
     return {
       databaseId: db.databaseId,
       dataSourceId: db.dataSourceId,
@@ -64,7 +69,42 @@ export class FakeNotionWriter implements INotionWriter {
     this.maybeFail(this.failCreatePage, dataSourceId, properties);
     const pageId = `page-${++this.counter}`;
     this.pages.set(pageId, { pageId, dataSourceId, properties: { ...properties } });
+    this.maybeFail(this.failCreatePageAfterSaving, dataSourceId, properties);
     return { pageId };
+  }
+
+  async findDatabase(
+    parentPageId: string,
+    title: string,
+    sourceIdPropertyName: string
+  ): Promise<CreatedDatabase | undefined> {
+    this.calls.push(`findDatabase:${title}`);
+    this.maybeFailFind();
+    const db = this.databases.find(
+      (d) =>
+        d.parentPageId === parentPageId && d.title === title && sourceIdPropertyName in d.schema
+    );
+    return db && { databaseId: db.databaseId, dataSourceId: db.dataSourceId };
+  }
+
+  async findPageBySourceId(
+    dataSourceId: string,
+    sourceIdPropertyName: string,
+    sourceId: string
+  ): Promise<{ pageId: string } | undefined> {
+    this.calls.push(`findPage:${sourceId}`);
+    this.maybeFailFind();
+    const page = [...this.pages.values()].find(
+      (p) =>
+        p.dataSourceId === dataSourceId &&
+        JSON.stringify(p.properties[sourceIdPropertyName]).includes(`"content":"${sourceId}"`)
+    );
+    return page && { pageId: page.pageId };
+  }
+
+  private maybeFailFind(): void {
+    const error = this.failFind?.();
+    if (error) throw error;
   }
 
   async updatePageProperties(pageId: string, properties: Properties): Promise<void> {

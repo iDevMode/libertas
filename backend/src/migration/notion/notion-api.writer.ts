@@ -32,6 +32,17 @@ interface DatabaseResponse {
   data_sources?: Array<{ id: string; name?: string }>;
 }
 
+interface BlockChildrenResponse {
+  results: Array<{
+    id: string;
+    type: string;
+    in_trash?: boolean;
+    child_database?: { title: string };
+  }>;
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -103,7 +114,78 @@ export class NotionApiWriter implements INotionWriter {
     await this.request('PATCH', `/pages/${pageId}`, { properties });
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  async findDatabase(
+    parentPageId: string,
+    title: string,
+    sourceIdPropertyName: string
+  ): Promise<CreatedDatabase | undefined> {
+    const matches: CreatedDatabase[] = [];
+    for (const databaseId of await this.childDatabaseIds(parentPageId, title)) {
+      const database = await this.request<DatabaseResponse>('GET', `/databases/${databaseId}`);
+      const dataSourceId = database.data_sources?.[0]?.id;
+      if (!dataSourceId) continue;
+      const dataSource = await this.request<{ properties?: Record<string, unknown> }>(
+        'GET',
+        `/data_sources/${dataSourceId}`
+      );
+      if (dataSource.properties && sourceIdPropertyName in dataSource.properties) {
+        matches.push({ databaseId, dataSourceId, url: database.url });
+      }
+    }
+    if (matches.length > 1) {
+      throw new NotionApiError(
+        409,
+        'ambiguous_database',
+        `${matches.length} databases named "${title}" could be from this migration; remove the extras and re-run`
+      );
+    }
+    return matches[0];
+  }
+
+  async findPageBySourceId(
+    dataSourceId: string,
+    sourceIdPropertyName: string,
+    sourceId: string
+  ): Promise<{ pageId: string } | undefined> {
+    const found = await this.request<{ results: Array<{ id: string }> }>(
+      'POST',
+      `/data_sources/${dataSourceId}/query`,
+      {
+        filter: { property: sourceIdPropertyName, rich_text: { equals: sourceId } },
+        sorts: [{ timestamp: 'created_time', direction: 'ascending' }],
+        page_size: 1,
+      },
+      true
+    );
+    const page = found.results[0];
+    return page && { pageId: page.id };
+  }
+
+  /** IDs of the live child databases with this title. Notion lists them as blocks of the page. */
+  private async childDatabaseIds(parentPageId: string, title: string): Promise<string[]> {
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const query: string = cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : '';
+      const page: BlockChildrenResponse = await this.request<BlockChildrenResponse>(
+        'GET',
+        `/blocks/${parentPageId}/children?page_size=100${query}`
+      );
+      for (const block of page.results) {
+        if (block.child_database?.title === title && !block.in_trash) ids.push(block.id);
+      }
+      cursor = page.has_more ? page.next_cursor : null;
+    } while (cursor);
+    return ids;
+  }
+
+  /** `readOnly` marks a request that is safe to repeat after a server error, whatever its method. */
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    readOnly = method === 'GET'
+  ): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       await this.throttle();
       const response = await fetch(`${NOTION_API_BASE}${path}`, {
@@ -119,8 +201,8 @@ export class NotionApiWriter implements INotionWriter {
       if (response.ok) return (await response.json()) as T;
 
       const error = (await response.json().catch(() => ({}))) as NotionErrorBody;
-      const wait = this.retryDelay(response, error, attempt, method);
-      if (wait === undefined) throw this.toError(response.status, error, method);
+      const wait = this.retryDelay(response, error, attempt, readOnly);
+      if (wait === undefined) throw this.toError(response.status, error, readOnly);
 
       logger.warn(
         { path, status: response.status, attempt, wait },
@@ -135,14 +217,14 @@ export class NotionApiWriter implements INotionWriter {
     response: Response,
     error: NotionErrorBody,
     attempt: number,
-    method: string
+    readOnly: boolean
   ): number | undefined {
     if (attempt >= this.maxRetries) return undefined;
     const status = response.status;
     const rateLimited =
       (status === 429 && error.rate_limit_reason !== 'public_api_request_blocked') ||
       status === 529;
-    const safeToRepeat = method === 'GET' && status >= 500 && status !== 529;
+    const safeToRepeat = readOnly && status >= 500 && status !== 529;
     if (!rateLimited && !safeToRepeat) return undefined;
 
     const retryAfter = Number(
@@ -152,9 +234,9 @@ export class NotionApiWriter implements INotionWriter {
     return Math.min(30_000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 250);
   }
 
-  private toError(status: number, error: NotionErrorBody, method: string): Error {
+  private toError(status: number, error: NotionErrorBody, readOnly: boolean): Error {
     const message = error.message ?? 'unknown error';
-    if (status >= 500 && status !== 529 && method !== 'GET') {
+    if (status >= 500 && status !== 529 && !readOnly) {
       return new NotionAmbiguousWriteError(status, message);
     }
     return new NotionApiError(status, error.code ?? 'unknown', message);

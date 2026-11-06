@@ -28,6 +28,21 @@ export interface INotionWriter {
     pageId: string,
     properties: Record<string, NotionPropertyValue>
   ): Promise<void>;
+  /**
+   * Finds a database an earlier attempt may have saved: under this parent, with this title
+   * and the source-ID property. Throws if several match, rather than guessing.
+   */
+  findDatabase(
+    parentPageId: string,
+    title: string,
+    sourceIdPropertyName: string
+  ): Promise<CreatedDatabase | undefined>;
+  /** Finds a page an earlier attempt may have saved, by its source-ID property. */
+  findPageBySourceId(
+    dataSourceId: string,
+    sourceIdPropertyName: string,
+    sourceId: string
+  ): Promise<{ pageId: string } | undefined>;
 }
 
 /** Notion rejected the request; retrying the same request will not help. */
@@ -44,7 +59,7 @@ export class NotionApiError extends Error {
 
 /**
  * A write failed with a server error after reaching Notion, so it may or may not have been
- * saved. It is not retried automatically, to avoid duplicates; verification checks it later.
+ * saved. It is not retried within a run; the next run looks for it before creating anything.
  */
 export class NotionAmbiguousWriteError extends Error {
   constructor(

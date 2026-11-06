@@ -43,6 +43,15 @@ export class DryRunNotionWriter implements INotionWriter {
     this.record('updatePageProperties', pageId, properties);
   }
 
+  /** A dry run starts from nothing, so there is never an earlier attempt to find. */
+  async findDatabase(): Promise<CreatedDatabase | undefined> {
+    return undefined;
+  }
+
+  async findPageBySourceId(): Promise<{ pageId: string } | undefined> {
+    return undefined;
+  }
+
   private record(
     kind: RecordedRequest['kind'],
     target: string,

@@ -163,8 +163,26 @@ describe('formatReport', () => {
     expect(text).toContain('Tasks / Days left: Copied as a fixed value.');
     expect(text).toContain('Files not copied yet: 3');
     expect(text).toContain('Invoices / VAT on rec1: "#ERROR!"');
-    expect(text).toContain('(may have been saved; check before re-running)');
+    expect(text).toContain('(may have been saved; a re-run checks for it first)');
     expect(text).toContain('Result: incomplete. Re-run with the same run ID');
+    expect(text).toContain("Links dropped by Notion's 100-per-field limit: 1.");
+  });
+
+  it('does not offer a re-run when dropped links are all that is left', () => {
+    const text = formatReport({
+      ...base,
+      tables: [
+        { ...base.tables[0], records: { planned: 6, created: 6, alreadyDone: 0, failed: 0 } },
+      ],
+      links: { planned: 10, written: 9, unresolved: 0, truncated: 1 },
+      failures: [],
+      complete: false,
+    });
+    expect(text).toContain(
+      "Result: incomplete. Links dropped by Notion's 100-per-field limit: 1. Re-running will not add them."
+    );
+    expect(text).not.toContain('Re-run with the same run ID');
+    expect(text).not.toContain('made it across');
   });
 
   it('reports a clean real run briefly', () => {

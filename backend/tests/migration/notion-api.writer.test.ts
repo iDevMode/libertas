@@ -129,6 +129,105 @@ describe('NotionApiWriter requests', () => {
   });
 });
 
+describe('NotionApiWriter lookups', () => {
+  it('finds the oldest page holding a source ID, on the current API version', async () => {
+    const calls = mockNotion(respond({ results: [{ id: 'page-1' }] }));
+
+    const found = await writer().findPageBySourceId('ds-1', 'Airtable record ID', 'rec1');
+
+    expect(found).toEqual({ pageId: 'page-1' });
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/data_sources/ds-1/query',
+      body: {
+        filter: { property: 'Airtable record ID', rich_text: { equals: 'rec1' } },
+        sorts: [{ timestamp: 'created_time', direction: 'ascending' }],
+        page_size: 1,
+      },
+    });
+    expect(calls[0].headers['Notion-Version']).toBe(NOTION_WRITE_API_VERSION);
+  });
+
+  it('reports no page when nothing holds the source ID', async () => {
+    mockNotion(respond({ results: [] }));
+    await expect(writer().findPageBySourceId('ds', 'P', 'rec1')).resolves.toBeUndefined();
+  });
+
+  it('repeats a lookup that hit a server error, since it changes nothing', async () => {
+    const calls = mockNotion(respond({}, 503), respond({ results: [] }));
+    await writer().findPageBySourceId('ds', 'P', 'rec1');
+    expect(calls).toHaveLength(2);
+  });
+
+  const child = (id: string, title: string, in_trash = false) => ({
+    id,
+    type: 'child_database',
+    in_trash,
+    child_database: { title },
+  });
+
+  it('finds a database by title and source-ID property across pages of children', async () => {
+    const calls = mockNotion(
+      respond({
+        results: [{ id: 'para', type: 'paragraph' }, child('db-other', 'Other')],
+        has_more: true,
+        next_cursor: 'cursor-2',
+      }),
+      respond({ results: [child('db-1', 'Tasks')], has_more: false, next_cursor: null }),
+      respond({ id: 'db-1', url: 'https://notion.so/db-1', data_sources: [{ id: 'ds-1' }] }),
+      respond({ id: 'ds-1', properties: { 'Airtable record ID': {} } })
+    );
+
+    const found = await writer().findDatabase('page-1', 'Tasks', 'Airtable record ID');
+
+    expect(found).toEqual({
+      databaseId: 'db-1',
+      dataSourceId: 'ds-1',
+      url: 'https://notion.so/db-1',
+    });
+    expect(calls.map((c) => c.path)).toEqual([
+      '/blocks/page-1/children',
+      '/blocks/page-1/children',
+      '/databases/db-1',
+      '/data_sources/ds-1',
+    ]);
+  });
+
+  it('ignores a same-named database without the source-ID property, or in the trash', async () => {
+    mockNotion(
+      respond({
+        results: [child('db-mine', 'Tasks'), child('db-binned', 'Tasks', true)],
+        has_more: false,
+        next_cursor: null,
+      }),
+      respond({ id: 'db-mine', data_sources: [{ id: 'ds-mine' }] }),
+      respond({ id: 'ds-mine', properties: { Name: {} } })
+    );
+    await expect(
+      writer().findDatabase('p', 'Tasks', 'Airtable record ID')
+    ).resolves.toBeUndefined();
+  });
+
+  it('refuses to guess when several databases match', async () => {
+    const database = (n: number) => respond({ id: `db-${n}`, data_sources: [{ id: `ds-${n}` }] });
+    const dataSource = () => respond({ properties: { 'Airtable record ID': {} } });
+    mockNotion(
+      respond({
+        results: [child('db-1', 'Tasks'), child('db-2', 'Tasks')],
+        has_more: false,
+        next_cursor: null,
+      }),
+      database(1),
+      dataSource(),
+      database(2),
+      dataSource()
+    );
+    await expect(writer().findDatabase('p', 'Tasks', 'Airtable record ID')).rejects.toBeInstanceOf(
+      NotionApiError
+    );
+  });
+});
+
 describe('NotionApiWriter retries', () => {
   it('waits for Retry-After when rate limited, then retries', async () => {
     const calls = mockNotion(

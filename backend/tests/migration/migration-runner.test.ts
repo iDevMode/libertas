@@ -295,6 +295,125 @@ describe('MigrationRunner: Notion limits', () => {
 
     expect(relationIds(writer.pageForSource('rec-hub'), 'Links')).toHaveLength(100);
     expect(report.links).toMatchObject({ planned: 101, written: 100, truncated: 1 });
+    expect(report.complete).toBe(false);
+  });
+});
+
+describe('MigrationRunner: re-running never duplicates', () => {
+  const unavailable = new NotionAmbiguousWriteError(503, 'unavailable');
+  const forAda = (_target: string, props: unknown) =>
+    JSON.stringify(props).includes(REC.ada) ? unavailable : undefined;
+  const firstTable = plan.tables[0].name;
+  const forFirstTable = (title: string) => (title === firstTable ? unavailable : undefined);
+
+  /** Leaves mappings pending, as a process killed between the write and recording it would. */
+  class CrashingStore extends MemoryIdMapStore {
+    override markFailed(...args: Parameters<MemoryIdMapStore['markFailed']>) {
+      return this.get(args[0], args[1], args[2])!;
+    }
+  }
+
+  it('finds a page that was saved despite a server error instead of creating it again', async () => {
+    const writer = new FakeNotionWriter();
+    const store = new MemoryIdMapStore();
+    writer.failCreatePageAfterSaving = forAda;
+    const first = await migrate(writer, store);
+    expect(first.report.complete).toBe(false);
+    expect(writer.pages.size).toBe(recordCount);
+
+    writer.failCreatePageAfterSaving = undefined;
+    const { report } = await migrate(writer, store);
+
+    expect(writer.pages.size).toBe(recordCount);
+    const people = report.tables.find((t) => t.table === 'People')!;
+    expect(people.records).toEqual({ planned: 3, created: 0, alreadyDone: 3, failed: 0 });
+    expect(relationIds(writer.pageForSource(REC.wireframes), 'Assignee')).toEqual([
+      writer.pageForSource(REC.ada).pageId,
+    ]);
+    expect(report.complete).toBe(true);
+  });
+
+  it('creates the page when the server error really did lose it', async () => {
+    const writer = new FakeNotionWriter();
+    const store = new MemoryIdMapStore();
+    writer.failCreatePage = forAda;
+    await migrate(writer, store);
+    expect(writer.pages.size).toBe(recordCount - 1);
+
+    writer.failCreatePage = undefined;
+    const { report } = await migrate(writer, store);
+
+    expect(writer.pages.size).toBe(recordCount);
+    expect(report.complete).toBe(true);
+  });
+
+  it('finds a page saved just before a crash', async () => {
+    const writer = new FakeNotionWriter();
+    const store = new CrashingStore();
+    writer.failCreatePageAfterSaving = forAda;
+    await migrate(writer, store);
+    expect(store.get('run-1', 'entity', REC.ada)?.status).toBe('pending');
+
+    writer.failCreatePageAfterSaving = undefined;
+    const { report } = await migrate(writer, store);
+
+    expect(writer.pages.size).toBe(recordCount);
+    expect(report.complete).toBe(true);
+  });
+
+  it('finds a database saved despite a server error instead of creating it again', async () => {
+    const writer = new FakeNotionWriter();
+    const store = new MemoryIdMapStore();
+    writer.failCreateDatabaseAfterSaving = forFirstTable;
+    await migrate(writer, store);
+    expect(writer.databases).toHaveLength(5);
+
+    writer.failCreateDatabaseAfterSaving = undefined;
+    const { report } = await migrate(writer, store);
+
+    expect(writer.databases).toHaveLength(5);
+    expect(writer.pages.size).toBe(recordCount);
+    expect(report.complete).toBe(true);
+  });
+
+  it('finds a database saved just before a crash', async () => {
+    const writer = new FakeNotionWriter();
+    const store = new CrashingStore();
+    writer.failCreateDatabaseAfterSaving = forFirstTable;
+    await migrate(writer, store);
+
+    writer.failCreateDatabaseAfterSaving = undefined;
+    const { report } = await migrate(writer, store);
+
+    expect(writer.databases).toHaveLength(5);
+    expect(report.complete).toBe(true);
+  });
+
+  it('creates nothing when it cannot check, and leaves the record for the next run', async () => {
+    const writer = new FakeNotionWriter();
+    const store = new MemoryIdMapStore();
+    writer.failCreatePageAfterSaving = forAda;
+    await migrate(writer, store);
+
+    writer.failCreatePageAfterSaving = undefined;
+    writer.failFind = () => new Error('lookup failed');
+    const second = await migrate(writer, store);
+    expect(writer.pages.size).toBe(recordCount);
+    expect(second.report.complete).toBe(false);
+    expect(second.report.failures[0]).toMatchObject({ stage: 'page', sourceId: REC.ada });
+
+    writer.failFind = undefined;
+    const third = await migrate(writer, store);
+    expect(writer.pages.size).toBe(recordCount);
+    expect(third.report.complete).toBe(true);
+  });
+
+  it('spends no lookups on a first run or on work already finished', async () => {
+    const writer = new FakeNotionWriter();
+    const store = new MemoryIdMapStore();
+    await migrate(writer, store);
+    await migrate(writer, store);
+    expect(writer.calls.filter((c) => c.startsWith('find'))).toEqual([]);
   });
 });
 

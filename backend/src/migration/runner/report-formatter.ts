@@ -69,7 +69,7 @@ function problemsSection(report: MigrationReport): string {
   if (!report.failures.length) return '';
   const lines = [`Failures: ${report.failures.length}`];
   report.failures.slice(0, MAX_LISTED).forEach((f) => {
-    const check = f.needsVerification ? ' (may have been saved; check before re-running)' : '';
+    const check = f.needsVerification ? ' (may have been saved; a re-run checks for it first)' : '';
     lines.push(`  [${f.stage}] ${f.table} ${f.sourceId}: ${f.error}${check}`);
   });
   if (report.failures.length > MAX_LISTED)
@@ -79,5 +79,17 @@ function problemsSection(report: MigrationReport): string {
 
 function verdict(report: MigrationReport): string {
   if (report.complete) return 'Result: every record and link made it across.';
-  return 'Result: incomplete. Re-run with the same run ID to retry only what is missing.';
+  const { unresolved, truncated } = report.links;
+  const retryable =
+    report.failures.length > 0 ||
+    unresolved > 0 ||
+    report.tables.some((table) => table.records.failed > 0);
+  const parts = ['Result: incomplete.'];
+  if (retryable) parts.push('Re-run with the same run ID to retry only what is missing.');
+  if (truncated) {
+    parts.push(
+      `Links dropped by Notion's 100-per-field limit: ${truncated}. Re-running will not add them.`
+    );
+  }
+  return parts.join(' ');
 }

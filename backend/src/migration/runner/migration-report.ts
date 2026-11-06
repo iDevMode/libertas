@@ -23,7 +23,7 @@ export interface FailureReport {
   table: string;
   sourceId: string;
   error: string;
-  /** The write may have been saved despite the error; check before retrying. */
+  /** The write may have been saved despite the error; a re-run looks for it before retrying. */
   needsVerification: boolean;
 }
 

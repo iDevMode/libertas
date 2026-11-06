@@ -26,6 +26,11 @@ const key = (tableId: string, propertyName: string): string => `${tableId}\u0000
  *
  * Every created object is recorded in the ID map before moving on, so re-running the
  * same run ID after an interruption skips finished work instead of duplicating it.
+ *
+ * An object with a mapping that never reached "created" may still have been saved: a server
+ * error can follow a successful write, and a crash can land between the write and recording
+ * it. Those objects are looked up in Notion before being created again. If the lookup itself
+ * fails nothing is created, and the object waits for the next run.
  */
 export class MigrationRunner {
   constructor(
@@ -71,12 +76,14 @@ export class MigrationRunner {
     }
 
     try {
+      const attempted = this.store.get(runId, 'database', table.sourceDatabaseId) !== undefined;
+      const earlier = attempted
+        ? await this.writer.findDatabase(parentPageId, table.name, table.sourceIdPropertyName)
+        : undefined;
       this.store.reserve(runId, 'database', table.sourceDatabaseId);
-      const created = await this.writer.createDatabase({
-        parentPageId,
-        title: table.name,
-        properties,
-      });
+      const created =
+        earlier ??
+        (await this.writer.createDatabase({ parentPageId, title: table.name, properties }));
       this.store.markCreated(runId, 'database', table.sourceDatabaseId, created.dataSourceId);
       context.dataSources.set(table.sourceDatabaseId, created.dataSourceId);
       Object.assign(context.tableReport(table), {
@@ -143,6 +150,10 @@ export class MigrationRunner {
     }
 
     try {
+      if (await this.adoptEarlierPage(context, table, sourceId, dataSourceId)) {
+        report.records.alreadyDone++;
+        return;
+      }
       this.store.reserve(runId, 'entity', sourceId);
       const { pageId } = await this.writer.createPage(
         dataSourceId,
@@ -155,6 +166,25 @@ export class MigrationRunner {
       report.records.failed++;
       context.fail('page', table, sourceId, error);
     }
+  }
+
+  /** Records a page saved by an earlier attempt of this record, if there is one. */
+  private async adoptEarlierPage(
+    context: RunContext,
+    table: TablePlan,
+    sourceId: string,
+    dataSourceId: string
+  ): Promise<boolean> {
+    const { runId } = context.options;
+    if (this.store.get(runId, 'entity', sourceId) === undefined) return false;
+    const earlier = await this.writer.findPageBySourceId(
+      dataSourceId,
+      table.sourceIdPropertyName,
+      sourceId
+    );
+    if (!earlier) return false;
+    this.store.markCreated(runId, 'entity', sourceId, earlier.pageId);
+    return true;
   }
 
   private async writeLinks(context: RunContext, results: NormalizedResult[]): Promise<void> {
