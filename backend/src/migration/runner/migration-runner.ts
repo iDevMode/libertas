@@ -144,6 +144,8 @@ export class MigrationRunner {
     const { runId } = context.options;
     const report = context.tableReport(table);
     const sourceId = record.entity.id;
+    // Built for every record, so each run's report lists all values that could not move.
+    const properties = buildPageProperties(context, table, record);
     if (this.store.getTargetId(runId, 'entity', sourceId)) {
       report.records.alreadyDone++;
       return;
@@ -155,10 +157,7 @@ export class MigrationRunner {
         return;
       }
       this.store.reserve(runId, 'entity', sourceId);
-      const { pageId } = await this.writer.createPage(
-        dataSourceId,
-        buildPageProperties(context, table, record)
-      );
+      const { pageId } = await this.writer.createPage(dataSourceId, properties);
       this.store.markCreated(runId, 'entity', sourceId, pageId);
       report.records.created++;
     } catch (error) {

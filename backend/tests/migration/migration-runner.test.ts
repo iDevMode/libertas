@@ -408,6 +408,15 @@ describe('MigrationRunner: re-running never duplicates', () => {
     expect(third.report.complete).toBe(true);
   });
 
+  it('still reports values that could not move when a re-run finds their records done', async () => {
+    const writer = new FakeNotionWriter();
+    const store = new MemoryIdMapStore();
+    const first = await migrate(writer, store);
+    const second = await migrate(writer, store);
+    expect(second.report.valuesSkipped).toEqual(first.report.valuesSkipped);
+    expect(second.report.valuesSkipped.count).toBe(1);
+  });
+
   it('spends no lookups on a first run or on work already finished', async () => {
     const writer = new FakeNotionWriter();
     const store = new MemoryIdMapStore();
